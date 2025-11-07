@@ -1,0 +1,9 @@
+.idea/
+.venv/
+__pycache__/
+training_optimized_bert_full.log
+data/
+best_bert_model.pt
+output_optimized/
+output_server/
+*.log
