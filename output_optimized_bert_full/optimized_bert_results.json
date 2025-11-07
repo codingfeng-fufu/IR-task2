@@ -1,0 +1,18 @@
+{
+  "model": "BERTClassifierOptimized",
+  "accuracy": 0.8852459016393442,
+  "f1_score": 0.9020979020979021,
+  "best_val_f1": 0.8626075147125396,
+  "test_samples": 976,
+  "train_samples": 232402,
+  "optimizations": {
+    "fgm_adversarial_training": true,
+    "ema_exponential_moving_average": true,
+    "differential_learning_rate": true,
+    "cosine_schedule_with_warmup": true,
+    "gradient_clipping": true,
+    "data_augmentation": true,
+    "early_stopping": true,
+    "validation_based_early_stopping": true
+  }
+}
