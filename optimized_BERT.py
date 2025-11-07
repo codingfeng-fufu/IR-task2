@@ -8,7 +8,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from typing import List, Dict, Tuple, Optional
-from transformers import BertTokenizer, BertForSequenceClassification
+from transformers import BertTokenizer, BertModel, BertForSequenceClassification
 from transformers import get_cosine_schedule_with_warmup
 from torch.utils.data import Dataset, DataLoader as TorchDataLoader
 from torch.optim import AdamW
@@ -157,9 +157,6 @@ class BERTClassifierOptimized:
 
         参数:
             model_name: BERT模型名称
-                - 'bert-base-uncased': 英文标准BERT
-                - 'bert-base-cased': 英文区分大小写BERT
-                - 'bert-base-chinese': 中文BERT
             max_length: 最大序列长度
             use_fgm: 是否使用FGM对抗训练
             use_ema: 是否使用指数移动平均
@@ -171,20 +168,25 @@ class BERTClassifierOptimized:
 
         # 设备
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        print(f"使用设备: {self.device}")
         if torch.cuda.is_available():
-            print(f"GPU: {torch.cuda.get_device_name(0)}")
-            print(f"显存: {torch.cuda.get_device_properties(0).total_memory / 1024 ** 3:.2f} GB")
+            print(f"使用设备: {self.device} ({torch.cuda.get_device_name(0)})")
+            print(f"GPU 内存: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.2f} GB")
+        else:
+            print(f"使用设备: {self.device}")
 
         # 加载tokenizer和模型
-        print(f"\n加载BERT模型: {model_name}")
+        print("加载BERT分词器...")
         self.tokenizer = BertTokenizer.from_pretrained(model_name)
+        print("加载BERT分类模型...")
         self.model = BertForSequenceClassification.from_pretrained(
             model_name,
             num_labels=2,
             output_attentions=False,
             output_hidden_states=False
         ).to(self.device)
+        
+        # 用于提取特征的模型(不带分类头)
+        self.feature_model = BertModel.from_pretrained(model_name).to(self.device)
 
         # 初始化对抗训练和EMA
         self.fgm = FGM(self.model) if use_fgm else None
@@ -194,15 +196,7 @@ class BERTClassifierOptimized:
         self.best_model_path = 'best_bert_model.pt'
 
     def focal_loss(self, logits, labels, alpha=0.25, gamma=2.0):
-        """
-        Focal Loss - 处理类别不平衡，专注于难分类样本
-
-        参数:
-            logits: 模型输出
-            labels: 真实标签
-            alpha: 平衡因子
-            gamma: 聚焦参数（gamma越大，对易分类样本的权重越小）
-        """
+        """Focal Loss - 处理类别不平衡"""
         ce_loss = F.cross_entropy(logits, labels, reduction='none')
         pt = torch.exp(-ce_loss)
         focal_loss = alpha * (1 - pt) ** gamma * ce_loss
@@ -215,51 +209,24 @@ class BERTClassifierOptimized:
               warmup_ratio=0.1, weight_decay=0.01,
               patience=3, use_focal_loss=False,
               augment_data=True):
-        """
-        训练模型（全优化版）
-
-        参数:
-            train_titles: 训练标题
-            train_labels: 训练标签
-            val_titles: 验证标题（如果为None，会自动从训练集划分20%）
-            val_labels: 验证标签
-            epochs: 训练轮数（建议10-15轮）
-            batch_size: 批次大小（16-32为佳，显存不足用8）
-            learning_rate: 学习率（BERT推荐2e-5）
-            warmup_ratio: 预热比例（0.1表示前10%的步数用于预热）
-            weight_decay: 权重衰减（L2正则化）
-            patience: 早停耐心值（验证F1多少轮不提升就停止）
-            use_focal_loss: 是否使用Focal Loss（类别不平衡时推荐）
-            augment_data: 是否数据增强
-        """
-        print("\n" + "=" * 70)
-        print("训练优化版BERT分类器")
-        print("=" * 70)
+        """训练模型（全优化版）"""
+        print("\n" + "="*60)
+        print("训练 BERT 分类器（优化版v2）")
+        print("="*60)
         print(f"模型: {self.model_name}")
-        print(f"训练样本: {len(train_titles)}")
+        print(f"训练样本数: {len(train_titles)}")
         print(f"轮数: {epochs}")
         print(f"批次大小: {batch_size}")
         print(f"学习率: {learning_rate}")
-        print(f"\n优化技巧:")
-        print(f"  ✓ 对抗训练(FGM): {self.use_fgm}")
-        print(f"  ✓ 指数移动平均(EMA): {self.use_ema}")
-        print(f"  ✓ 差异化学习率: 是")
-        print(f"  ✓ Cosine学习率调度: 是")
-        print(f"  ✓ 梯度裁剪: 是")
-        print(f"  ✓ Focal Loss: {use_focal_loss}")
-        print(f"  ✓ 数据增强: {augment_data}")
-        print(f"  ✓ 验证早停: 是")
-
-        # 如果没有提供验证集，自动划分20%
+        print(f"预热比例: {warmup_ratio}")
+        
+        # 如果没有提供验证集，从训练集划分20%
         if val_titles is None:
             from sklearn.model_selection import train_test_split
             train_titles, val_titles, train_labels, val_labels = train_test_split(
-                train_titles, train_labels, test_size=0.2,
-                random_state=42, stratify=train_labels
+                train_titles, train_labels, test_size=0.2, random_state=42, stratify=train_labels
             )
-            print(f"\n自动划分验证集:")
-            print(f"  训练集: {len(train_titles)} 样本")
-            print(f"  验证集: {len(val_titles)} 样本")
+            print(f"自动划分验证集: {len(val_titles)} 样本")
 
         # 创建数据集
         train_dataset = TitleDataset(
@@ -271,49 +238,25 @@ class BERTClassifierOptimized:
             self.max_length, augment=False
         )
 
-        train_loader = TorchDataLoader(
-            train_dataset, batch_size=batch_size, shuffle=True
-        )
-        val_loader = TorchDataLoader(
-            val_dataset, batch_size=batch_size, shuffle=False
-        )
+        train_loader = TorchDataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+        val_loader = TorchDataLoader(val_dataset, batch_size=batch_size, shuffle=False)
 
-        # 差异化学习率：分类层（classifier）用更大的学习率
-        no_decay = ['bias', 'LayerNorm.weight']
+        # 差异化学习率
         optimizer_grouped_parameters = [
-            # 分类层，有weight decay
             {
-                'params': [p for n, p in self.model.named_parameters()
-                           if 'classifier' in n and not any(nd in n for nd in no_decay)],
-                'lr': learning_rate * 10,  # 分类层用10倍学习率
+                'params': [p for n, p in self.model.named_parameters() if 'classifier' in n],
+                'lr': learning_rate * 10,  # 分类层用更大学习率
                 'weight_decay': weight_decay
             },
-            # 分类层，无weight decay
             {
-                'params': [p for n, p in self.model.named_parameters()
-                           if 'classifier' in n and any(nd in n for nd in no_decay)],
-                'lr': learning_rate * 10,
-                'weight_decay': 0.0
-            },
-            # BERT层，有weight decay
-            {
-                'params': [p for n, p in self.model.named_parameters()
-                           if 'classifier' not in n and not any(nd in n for nd in no_decay)],
+                'params': [p for n, p in self.model.named_parameters() if 'classifier' not in n],
                 'lr': learning_rate,
                 'weight_decay': weight_decay
-            },
-            # BERT层，无weight decay
-            {
-                'params': [p for n, p in self.model.named_parameters()
-                           if 'classifier' not in n and any(nd in n for nd in no_decay)],
-                'lr': learning_rate,
-                'weight_decay': 0.0
             }
         ]
-
         optimizer = AdamW(optimizer_grouped_parameters)
 
-        # Warmup + Cosine学习率调度
+        # 学习率调度
         total_steps = len(train_loader) * epochs
         warmup_steps = int(total_steps * warmup_ratio)
         scheduler = get_cosine_schedule_with_warmup(
@@ -321,29 +264,25 @@ class BERTClassifierOptimized:
             num_warmup_steps=warmup_steps,
             num_training_steps=total_steps
         )
+        print(f"总训练步数: {total_steps}")
+        print(f"预热步数: {warmup_steps}")
 
-        print(f"\n学习率调度:")
-        print(f"  总步数: {total_steps}")
-        print(f"  Warmup步数: {warmup_steps}")
-        print(f"  BERT层学习率: {learning_rate}")
-        print(f"  分类层学习率: {learning_rate * 10}")
-
-        # 训练循环
-        best_val_f1 = 0
+        # 早停
+        best_val_f1 = 0.0
         patience_counter = 0
 
+        # 训练循环
         for epoch in range(epochs):
-            print(f"\n{'=' * 70}")
+            print(f"\n{'='*60}")
             print(f"Epoch {epoch + 1}/{epochs}")
-            print(f"{'=' * 70}")
+            print(f"{'='*60}")
 
-            # ========== 训练阶段 ==========
             self.model.train()
-            train_loss = 0
-            train_correct = 0
-            train_total = 0
+            total_loss = 0
+            correct_predictions = 0
+            total_predictions = 0
 
-            progress_bar = tqdm(train_loader, desc="训练")
+            progress_bar = tqdm(train_loader, desc=f"训练中")
 
             for batch in progress_bar:
                 input_ids = batch['input_ids'].to(self.device)
@@ -353,75 +292,80 @@ class BERTClassifierOptimized:
                 # 前向传播
                 outputs = self.model(
                     input_ids=input_ids,
-                    attention_mask=attention_mask
+                    attention_mask=attention_mask,
+                    labels=labels
                 )
+
+                loss = outputs.loss if not use_focal_loss else self.focal_loss(outputs.logits, labels)
                 logits = outputs.logits
 
-                # 计算损失
-                if use_focal_loss:
-                    loss = self.focal_loss(logits, labels)
-                else:
-                    loss = F.cross_entropy(logits, labels)
-
                 # 反向传播
+                optimizer.zero_grad()
                 loss.backward()
 
-                # FGM对抗训练
+                # 对抗训练
                 if self.use_fgm:
                     self.fgm.attack()
                     outputs_adv = self.model(
                         input_ids=input_ids,
-                        attention_mask=attention_mask
+                        attention_mask=attention_mask,
+                        labels=labels
                     )
-                    logits_adv = outputs_adv.logits
-                    if use_focal_loss:
-                        loss_adv = self.focal_loss(logits_adv, labels)
-                    else:
-                        loss_adv = F.cross_entropy(logits_adv, labels)
+                    loss_adv = outputs_adv.loss if not use_focal_loss else self.focal_loss(outputs_adv.logits, labels)
                     loss_adv.backward()
                     self.fgm.restore()
 
-                # 梯度裁剪（防止梯度爆炸）
+                # 梯度裁剪
                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
 
                 optimizer.step()
                 scheduler.step()
-                optimizer.zero_grad()
 
                 # EMA更新
                 if self.use_ema:
                     self.ema.update()
 
                 # 统计
-                train_loss += loss.item()
-                preds = torch.argmax(logits, dim=1)
-                train_correct += (preds == labels).sum().item()
-                train_total += labels.size(0)
+                total_loss += loss.item()
+                predictions = torch.argmax(logits, dim=1)
+                correct_predictions += (predictions == labels).sum().item()
+                total_predictions += labels.size(0)
 
+                # 更新进度条
                 progress_bar.set_postfix({
                     'loss': f'{loss.item():.4f}',
-                    'acc': f'{train_correct / train_total:.4f}',
+                    'acc': f'{correct_predictions/total_predictions:.4f}',
                     'lr': f'{scheduler.get_last_lr()[0]:.2e}'
                 })
 
-            avg_train_loss = train_loss / len(train_loader)
-            train_acc = train_correct / train_total
+            # Epoch完成统计
+            avg_loss = total_loss / len(train_loader)
+            accuracy = correct_predictions / total_predictions
 
-            # ========== 验证阶段 ==========
-            val_loss, val_acc, val_f1, val_preds, val_true = self.evaluate(
-                val_loader, use_focal_loss
-            )
+            print(f"\nEpoch {epoch + 1} 完成:")
+            print(f"  - 平均损失: {avg_loss:.4f}")
+            print(f"  - 训练准确率: {accuracy:.4f} ({accuracy*100:.2f}%)")
+            print(f"  - 当前学习率: {scheduler.get_last_lr()[0]:.2e}")
 
-            print(f"\nEpoch {epoch + 1} 结果:")
-            print(f"  训练 - Loss: {avg_train_loss:.4f} | Acc: {train_acc:.4f} ({train_acc * 100:.2f}%)")
-            print(f"  验证 - Loss: {val_loss:.4f} | Acc: {val_acc:.4f} ({val_acc * 100:.2f}%) | F1: {val_f1:.4f}")
+            # 验证集评估
+            if self.use_ema:
+                self.ema.apply_shadow()
+            
+            val_loss, val_acc, val_f1, _, _ = self.evaluate(val_loader, use_focal_loss)
+            
+            if self.use_ema:
+                self.ema.restore()
 
-            # 早停检查（基于F1分数）
+            print(f"  - 验证损失: {val_loss:.4f}")
+            print(f"  - 验证准确率: {val_acc:.4f} ({val_acc*100:.2f}%)")
+            print(f"  - 验证F1分数: {val_f1:.4f}")
+
+            # 早停检查
             if val_f1 > best_val_f1:
                 best_val_f1 = val_f1
                 patience_counter = 0
 
-                # 保存最佳模型（使用EMA参数）
+                # 保存最佳模型
                 if self.use_ema:
                     self.ema.apply_shadow()
                     torch.save(self.model.state_dict(), self.best_model_path)
@@ -429,10 +373,10 @@ class BERTClassifierOptimized:
                 else:
                     torch.save(self.model.state_dict(), self.best_model_path)
 
-                print(f"  ✓ 最佳模型已保存! (F1: {best_val_f1:.4f})")
+                print(f"  ✓ 损失改善（最佳损失: {best_val_f1:.4f}）")
             else:
                 patience_counter += 1
-                print(f"  - 验证F1未提升 (当前最佳: {best_val_f1:.4f}, 耐心: {patience_counter}/{patience})")
+                print(f"  - 损失未改善（最佳损失: {best_val_f1:.4f}）")
 
                 if patience_counter >= patience:
                     print(f"\n早停触发! 最佳验证F1: {best_val_f1:.4f}")
@@ -443,8 +387,7 @@ class BERTClassifierOptimized:
         self.model.load_state_dict(torch.load(self.best_model_path))
         self.is_trained = True
 
-        print("\n✓ 训练完成!")
-        print(f"✓ 最佳验证F1分数: {best_val_f1:.4f}")
+        print("\n✓ BERT训练完成!")
         return best_val_f1
 
     def evaluate(self, dataloader, use_focal_loss=False):
@@ -496,7 +439,7 @@ class BERTClassifierOptimized:
         dataloader = TorchDataLoader(dataset, batch_size=batch_size, shuffle=False)
 
         with torch.no_grad():
-            for batch in tqdm(dataloader, desc="预测"):
+            for batch in tqdm(dataloader, desc="预测中"):
                 input_ids = batch['input_ids'].to(self.device)
                 attention_mask = batch['attention_mask'].to(self.device)
 
@@ -537,67 +480,52 @@ class BERTClassifierOptimized:
 
         return np.vstack(probabilities)
 
-    def detailed_evaluation(self, titles: List[str], labels: List[int],
-                            batch_size=16):
-        """详细评估报告"""
-        predictions = self.predict(titles, batch_size)
-        probabilities = self.predict_proba(titles, batch_size)
-
-        print("\n" + "=" * 70)
-        print("详细评估报告")
-        print("=" * 70)
-
-        # 分类报告
-        print("\n分类报告:")
-        print(classification_report(labels, predictions,
-                                    target_names=['错误标题', '正确标题'],
-                                    digits=4))
-
-        # 混淆矩阵
-        cm = confusion_matrix(labels, predictions)
-        print("混淆矩阵:")
-        print(f"              预测错误  预测正确")
-        print(f"实际错误      {cm[0][0]:6d}    {cm[0][1]:6d}")
-        print(f"实际正确      {cm[1][0]:6d}    {cm[1][1]:6d}")
-
-        # 各类指标
-        accuracy = np.mean(predictions == labels)
-        f1 = f1_score(labels, predictions, average='binary')
-
-        print(f"\n总体指标:")
-        print(f"  准确率(Accuracy): {accuracy:.4f} ({accuracy * 100:.2f}%)")
-        print(f"  F1分数: {f1:.4f}")
-
-        # 显示一些预测示例
-        print(f"\n预测示例（前10个）:")
-        print(f"{'标题':<50} {'真实':<8} {'预测':<8} {'置信度':<10}")
-        print("-" * 80)
-
-        for i in range(min(10, len(titles))):
-            title = titles[i][:47] + "..." if len(titles[i]) > 50 else titles[i]
-            true_label = "正确" if labels[i] == 1 else "错误"
-            pred_label = "正确" if predictions[i] == 1 else "错误"
-            confidence = probabilities[i][predictions[i]]
-
-            # 标记预测错误的样本
-            marker = "❌" if predictions[i] != labels[i] else "✓"
-            print(f"{marker} {title:<48} {true_label:<8} {pred_label:<8} {confidence:.3f}")
-
-        return {
-            'accuracy': accuracy,
-            'f1': f1,
-            'predictions': predictions,
-            'probabilities': probabilities
-        }
+    def get_feature_vectors(self, titles: List[str], batch_size=16) -> np.ndarray:
+        """
+        获取BERT的特征向量([CLS] token的嵌入)
+        用于可视化
+        
+        参数:
+            titles: 标题列表
+            batch_size: 批次大小
+            
+        返回:
+            特征矩阵
+        """
+        if not self.is_trained:
+            raise ValueError("模型尚未训练!请先调用train()方法")
+        
+        self.feature_model.eval()
+        embeddings = []
+        
+        dummy_labels = [0] * len(titles)
+        dataset = TitleDataset(titles, dummy_labels, self.tokenizer, self.max_length)
+        dataloader = TorchDataLoader(dataset, batch_size=batch_size, shuffle=False)
+        
+        with torch.no_grad():
+            for batch in tqdm(dataloader, desc="提取特征"):
+                input_ids = batch['input_ids'].to(self.device)
+                attention_mask = batch['attention_mask'].to(self.device)
+                
+                outputs = self.feature_model(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask
+                )
+                
+                # 使用[CLS] token的嵌入(第一个token)
+                cls_embeddings = outputs.last_hidden_state[:, 0, :].cpu().numpy()
+                embeddings.append(cls_embeddings)
+        
+        return np.vstack(embeddings)
 
 
 def main():
     """主函数：演示优化版BERT分类器"""
     from data_loader import DataLoader, create_sample_data
 
-    print("=" * 70)
-    print(" 优化版BERT分类器 - 效果优先")
-    print("=" * 70)
+    print("="*70)
+    print(" 优化版BERT分类器演示")
+    print("="*70)
 
     # 加载数据
     train_titles, train_labels, test_titles, test_labels = DataLoader.prepare_dataset(
@@ -608,49 +536,55 @@ def main():
 
     # 如果没有实际文件，使用示例数据
     if len(train_titles) == 0:
-        print("\n未找到数据文件，使用示例数据进行演示...")
         train_titles, train_labels, test_titles, test_labels = create_sample_data()
 
-    print(f"\n数据统计:")
-    print(f"  训练样本: {len(train_titles)}")
-    print(f"  测试样本: {len(test_titles)}")
-    print(f"  正样本比例: {sum(train_labels) / len(train_labels):.2%}")
-    print(f"  负样本比例: {(len(train_labels) - sum(train_labels)) / len(train_labels):.2%}")
+    # 为了演示，只使用部分数据
+    print("\n注意: 为了演示，只使用部分数据")
+    train_titles = train_titles[:200]
+    train_labels = train_labels[:200]
+    test_titles = test_titles[:50]
+    test_labels = test_labels[:50]
 
-    # 创建优化版分类器
+    # 创建并训练分类器
     classifier = BERTClassifierOptimized(
         model_name='bert-base-uncased',
         max_length=64,
-        use_fgm=True,  # 使用对抗训练
-        use_ema=True  # 使用指数移动平均
+        use_fgm=True,
+        use_ema=True
     )
 
-    # 训练（使用所有优化技巧）
-    best_f1 = classifier.train(
+    classifier.train(
         train_titles,
         train_labels,
-        epochs=10,  # 充足的训练轮数
-        batch_size=16,  # 合适的批次大小
-        learning_rate=2e-5,  # BERT推荐学习率
-        warmup_ratio=0.1,  # 10%步数用于warmup
-        patience=3,  # 3轮不提升就早停
-        use_focal_loss=False,  # 是否用Focal Loss（类别不平衡时设为True）
-        augment_data=True  # 数据增强
+        epochs=2,
+        batch_size=8,
+        learning_rate=2e-5
     )
 
-    # 在测试集上详细评估
-    print("\n" + "=" * 70)
-    print("测试集评估")
-    print("=" * 70)
+    # 进行预测
+    print("\n" + "="*60)
+    print("在测试集上进行预测")
+    print("="*60)
 
-    results = classifier.detailed_evaluation(test_titles, test_labels)
+    predictions = classifier.predict(test_titles, batch_size=8)
+    probabilities = classifier.predict_proba(test_titles, batch_size=8)
 
-    print(f"\n{'=' * 70}")
-    print("最终结果总结:")
-    print(f"  验证集最佳F1: {best_f1:.4f}")
-    print(f"  测试集准确率: {results['accuracy']:.4f} ({results['accuracy'] * 100:.2f}%)")
-    print(f"  测试集F1分数: {results['f1']:.4f}")
-    print(f"{'=' * 70}")
+    # 显示一些预测结果
+    print("\n预测结果示例:")
+    print(f"{'标题':<50} {'真实':<8} {'预测':<8} {'置信度':<10}")
+    print("-" * 80)
+
+    for i in range(min(10, len(test_titles))):
+        title = test_titles[i][:47] + "..." if len(test_titles[i]) > 50 else test_titles[i]
+        true_label = "正确" if test_labels[i] == 1 else "错误"
+        pred_label = "正确" if predictions[i] == 1 else "错误"
+        confidence = probabilities[i][predictions[i]]
+
+        print(f"{title:<50} {true_label:<8} {pred_label:<8} {confidence:.3f}")
+
+    # 计算准确率
+    accuracy = np.mean(predictions == test_labels)
+    print(f"\n测试集准确率: {accuracy:.4f} ({accuracy*100:.2f}%)")
 
 
 if __name__ == "__main__":
