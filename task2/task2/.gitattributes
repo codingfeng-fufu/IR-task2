@@ -4,3 +4,5 @@ models/** filter=lfs diff=lfs merge=lfs -text
 *.pth filter=lfs diff=lfs merge=lfs -text
 *.h5 filter=lfs diff=lfs merge=lfs -text
 *.pkl filter=lfs diff=lfs merge=lfs -text
+models/best_bert_model.pt filter=lfs diff=lfs merge=lfs -text
+models/word2vec_svm_model_svm.pkl filter=lfs diff=lfs merge=lfs -text
