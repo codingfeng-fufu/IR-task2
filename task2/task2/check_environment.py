@@ -108,10 +108,14 @@ def check_data_files():
     print("检查数据文件...")
     print("=" * 60)
     
+    # 使用相对路径
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    data_dir = os.path.join(base_dir, 'data')
+    
     files = {
-        'data/positive.txt': '正样本训练集',
-        'data/negative.txt': '负样本训练集',
-        'data/testSet-1000.xlsx': '测试集'
+        os.path.join(data_dir, 'positive.txt'): '正样本训练集',
+        os.path.join(data_dir, 'negative.txt'): '负样本训练集',
+        os.path.join(data_dir, 'testSet-1000.xlsx'): '测试集'
     }
     
     all_ok = True

@@ -52,10 +52,14 @@ def load_test_data(use_sample_data: bool = False):
         _, _, test_titles, test_labels = create_sample_data()
     else:
         # Try loading actual files
+        # Use relative paths based on script location
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        data_dir = os.path.join(base_dir, 'data')
+        
         _, _, test_titles, test_labels = DataLoader.prepare_dataset(
-            'data/positive.txt',
-            'data/negative.txt',
-            'data/testSet-1000.xlsx'
+            os.path.join(data_dir, 'positive.txt'),
+            os.path.join(data_dir, 'negative.txt'),
+            os.path.join(data_dir, 'testSet-1000.xlsx')
         )
 
         # If files don't exist, use sample data
@@ -92,11 +96,15 @@ def load_saved_models(bert_model_path='models/best_bert_model.pt'):
         print(f"   Please train the model first using main.py")
         classifiers['Naive Bayes'] = None
     else:
-        nb_classifier = NaiveBayesClassifier(model_path=nb_path)
-        if nb_classifier.load_model():
-            classifiers['Naive Bayes'] = nb_classifier
-            print(f"   ✓ Naive Bayes model loaded successfully")
-        else:
+        try:
+            nb_classifier = NaiveBayesClassifier(model_path=nb_path)
+            if nb_classifier.load_model():
+                classifiers['Naive Bayes'] = nb_classifier
+                print(f"   ✓ Naive Bayes model loaded successfully")
+            else:
+                classifiers['Naive Bayes'] = None
+        except Exception as e:
+            print(f"   ⚠️  Failed to load Naive Bayes model: {str(e)}")
             classifiers['Naive Bayes'] = None
     
     # 2. Load Word2Vec+SVM

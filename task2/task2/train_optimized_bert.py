@@ -8,6 +8,9 @@ train_optimized_bert.py
 import sys
 import os
 
+# 设置 Hugging Face 镜像源
+os.environ['HF_ENDPOINT'] = 'https://hf-mirror.com'
+
 # 添加 core 目录到路径
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'core'))
 
@@ -28,10 +31,14 @@ def main():
     print("-" * 80)
 
     try:
+        # 使用相对路径
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        data_dir = os.path.join(base_dir, 'data')
+        
         train_titles, train_labels, test_titles, test_labels = DataLoader.prepare_dataset(
-            'data/positive.txt',
-            'data/negative.txt',
-            'data/testSet-1000.xlsx'
+            os.path.join(data_dir, 'positive.txt'),
+            os.path.join(data_dir, 'negative.txt'),
+            os.path.join(data_dir, 'testSet-1000.xlsx')
         )
 
         print(f"✓ 训练集: {len(train_titles)} 样本")

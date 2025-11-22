@@ -7,6 +7,10 @@ with your actual data and compare different models
 
 import sys
 import os
+
+# 设置 Hugging Face 镜像源
+os.environ['HF_ENDPOINT'] = 'https://hf-mirror.com'
+
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from bert_classifier_optimized import OptimizedBERTClassifier

@@ -6,6 +6,8 @@ data_loader.py
 """
 
 import re
+import zipfile
+import xml.etree.ElementTree as ET
 from typing import List, Tuple
 
 
@@ -25,10 +27,22 @@ class DataLoader:
             标题字符串列表
         """
         try:
+            # 尝试使用指定的编码加载
             with open(filepath, 'r', encoding=encoding) as f:
                 titles = [line.strip() for line in f if line.strip()]
             print(f"成功加载 {len(titles)} 条标题从 {filepath}")
             return titles
+        except UnicodeDecodeError:
+            # 如果失败，尝试使用 GBK 编码
+            print(f"⚠️  {filepath} 不是 {encoding} 编码，尝试使用 GBK...")
+            try:
+                with open(filepath, 'r', encoding='gbk') as f:
+                    titles = [line.strip() for line in f if line.strip()]
+                print(f"成功加载 {len(titles)} 条标题从 {filepath} (GBK)")
+                return titles
+            except Exception as e:
+                print(f"加载 {filepath} 时出错 (GBK): {str(e)}")
+                return []
         except FileNotFoundError:
             print(f"错误: 找不到文件 {filepath}")
             return []
@@ -57,6 +71,115 @@ class DataLoader:
         title = ' '.join(title.split())
 
         return title
+
+    @staticmethod
+    def _read_excel_fallback(filepath: str):
+        """
+        当 openpyxl 失败时，手动解析 XLSX 文件
+        """
+        import pandas as pd
+        
+        print(f"⚠️  启动手动 XML 解析模式读取 {filepath}...")
+        
+        try:
+            with zipfile.ZipFile(filepath, 'r') as z:
+                # 1. 加载共享字符串 (Shared Strings)
+                shared_strings = []
+                if 'xl/sharedStrings.xml' in z.namelist():
+                    with z.open('xl/sharedStrings.xml') as f:
+                        tree = ET.parse(f)
+                        root = tree.getroot()
+                        ns = {'main': 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
+                        # 查找所有 <si> 标签
+                        for si in root.findall('main:si', ns):
+                            # 尝试直接获取 <t>
+                            t = si.find('main:t', ns)
+                            if t is not None and t.text:
+                                shared_strings.append(t.text)
+                            else:
+                                # 尝试获取 <r><t> (富文本)
+                                text_parts = []
+                                for t_part in si.findall('.//main:t', ns):
+                                    if t_part.text:
+                                        text_parts.append(t_part.text)
+                                shared_strings.append("".join(text_parts))
+
+                # 2. 加载第一个工作表
+                sheet_path = 'xl/worksheets/sheet1.xml'
+                if sheet_path not in z.namelist():
+                    # 尝试查找 workbook.xml 来确定 sheet 路径 (简化处理，假设是 sheet1)
+                    # 如果没有 sheet1，尝试列出所有 worksheets
+                    sheets = [n for n in z.namelist() if n.startswith('xl/worksheets/sheet') and n.endswith('.xml')]
+                    if sheets:
+                        sheet_path = sheets[0]
+                    else:
+                        raise ValueError("无法找到工作表 XML 文件")
+
+                data = []
+                with z.open(sheet_path) as f:
+                    tree = ET.parse(f)
+                    root = tree.getroot()
+                    ns = {'main': 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
+                    
+                    # 遍历所有行
+                    for row in root.findall('.//main:row', ns):
+                        row_values = []
+                        # 遍历行中的所有单元格
+                        for cell in row.findall('main:c', ns):
+                            t = cell.get('t') # 类型
+                            v_tag = cell.find('main:v', ns) # 值
+                            value = v_tag.text if v_tag is not None else None
+                            
+                            if t == 's' and value is not None:
+                                # 共享字符串索引
+                                try:
+                                    idx = int(value)
+                                    if 0 <= idx < len(shared_strings):
+                                        value = shared_strings[idx]
+                                except:
+                                    pass
+                            elif t == 'str':
+                                # 内联字符串
+                                pass 
+                            elif value is not None:
+                                # 数值
+                                try:
+                                    f_val = float(value)
+                                    if f_val.is_integer():
+                                        value = int(f_val)
+                                    else:
+                                        value = f_val
+                                except:
+                                    pass
+                            
+                            row_values.append(value)
+                        
+                        if row_values:
+                            data.append(row_values)
+
+            if not data:
+                raise ValueError("解析后数据为空")
+
+            # 假设第一行是表头
+            # 注意：XML解析可能丢失空单元格，导致列对齐问题。
+            # 对于这个特定的数据集，我们假设它是规整的。
+            # 如果第一行比其他行短，可能需要填充
+            max_cols = max(len(r) for r in data)
+            
+            # 规范化数据长度
+            normalized_data = []
+            for r in data:
+                if len(r) < max_cols:
+                    r.extend([None] * (max_cols - len(r)))
+                normalized_data.append(r)
+                
+            headers = normalized_data[0]
+            rows = normalized_data[1:]
+            return pd.DataFrame(rows, columns=headers)
+
+        except Exception as e:
+            print(f"❌ 手动 XML 解析失败: {e}")
+            raise e
 
     @staticmethod
     def prepare_dataset(
@@ -95,7 +218,19 @@ class DataLoader:
 
         try:
             import pandas as pd
-            df = pd.read_excel(test_file)
+            # 尝试使用 openpyxl 引擎，并忽略筛选器错误
+            try:
+                df = pd.read_excel(test_file, engine='openpyxl')
+            except ValueError as ve:
+                if "Value must be either numerical or a string containing a wildcard" in str(ve):
+                    print(f"⚠️  检测到 Excel 筛选器错误，尝试使用手动 XML 解析...")
+                    try:
+                        df = DataLoader._read_excel_fallback(test_file)
+                    except Exception as e_fallback:
+                        print(f"❌ 所有读取尝试均失败。")
+                        raise ve
+                else:
+                    raise ve
 
             # 列名: 'title given by manchine', 'Y/N'
             # Y/N: Y表示正确标题(1), N表示错误标题(0)

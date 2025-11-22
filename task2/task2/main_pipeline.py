@@ -7,6 +7,10 @@ main.py
 
 import sys
 import os
+
+# 设置 Hugging Face 镜像源
+os.environ['HF_ENDPOINT'] = 'https://hf-mirror.com'
+
 from typing import List, Dict
 import warnings
 warnings.filterwarnings('ignore')
@@ -53,10 +57,14 @@ def load_data(use_sample_data: bool = False, max_train_samples: int = None):
         train_titles, train_labels, test_titles, test_labels = create_sample_data()
     else:
         # 尝试加载实际文件
+        # 使用 os.path.join 构建相对路径，确保跨平台兼容性
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        data_dir = os.path.join(base_dir, 'data')
+        
         train_titles, train_labels, test_titles, test_labels = DataLoader.prepare_dataset(
-            'data/positive.txt',
-            'data/negative.txt',
-            'data/testSet-1000.xlsx'
+            os.path.join(data_dir, 'positive.txt'),
+            os.path.join(data_dir, 'negative.txt'),
+            os.path.join(data_dir, 'testSet-1000.xlsx')
         )
 
         # 如果文件不存在,使用示例数据
