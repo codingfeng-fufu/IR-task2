@@ -20,3 +20,7 @@ data/
 
 # System
 .DS_Store
+
+# Large model files (>100MB)
+models/best_bert_model.pt
+models/word2vec_svm_model_svm.pkl
