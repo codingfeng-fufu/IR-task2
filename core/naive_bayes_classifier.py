@@ -29,13 +29,15 @@ class NaiveBayesClassifier:
         self.max_features = max_features
         self.ngram_range = ngram_range
         
-        # TF-IDF向量化器
+        # TF-IDF向量化器 - 将文本转换为数值特征向量
+        # TF-IDF = Term Frequency(词频) × Inverse Document Frequency(逆文档频率)
+        # 作用: 衡量一个词对文档的重要性
         self.vectorizer = TfidfVectorizer(
-            max_features=max_features,
-            ngram_range=ngram_range,
-            min_df=2,  # 忽略出现次数少于2次的词
-            preprocessor=DataLoader.preprocess_title,
-            sublinear_tf=True  # 使用对数TF缩放
+            max_features=max_features,     # 最多保留5000个最重要的特征(词/n-gram)
+            ngram_range=ngram_range,       # (1,2)表示使用1-gram和2-gram，如"machine"和"machine learning"
+            min_df=2,                      # 最小文档频率：忽略出现次数少于2次的词(去除罕见词)
+            preprocessor=DataLoader.preprocess_title,  # 预处理函数(小写、去特殊字符)
+            sublinear_tf=True              # 使用对数TF缩放：tf_scaled = 1 + log(tf)，减少高频词的影响
         )
         
         # 朴素贝叶斯分类器,使用Laplace平滑

@@ -75,64 +75,144 @@ class TitleDataset(Dataset):
 
 
 class FGM:
-    """Fast Gradient Method 对抗训练"""
+    """
+    Fast Gradient Method (FGM) - 快速梯度对抗训练
+
+    原理:
+    - 在词嵌入层添加微小的对抗扰动，生成"对抗样本"
+    - 对抗样本是让模型最容易出错的输入
+    - 在对抗样本上训练，提高模型鲁棒性
+
+    算法流程:
+    1. 正常前向传播计算梯度
+    2. 在嵌入层添加对抗扰动: r_adv = ε × grad / ||grad||
+    3. 用扰动后的嵌入再做一次前向传播
+    4. 恢复原始嵌入
+
+    效果: 提高模型对输入扰动的鲁棒性，防止过拟合
+    """
 
     def __init__(self, model, epsilon=1.0):
-        self.model = model
-        self.epsilon = epsilon
-        self.backup = {}
+        """
+        初始化FGM对抗训练
+
+        参数:
+            model: PyTorch模型
+            epsilon: 扰动强度（通常0.5-2.0）
+        """
+        self.model = model          # 要训练的模型
+        self.epsilon = epsilon      # 对抗扰动的强度系数
+        self.backup = {}            # 备份原始参数
 
     def attack(self, emb_name='word_embeddings'):
-        """生成对抗样本"""
+        """
+        生成对抗样本（在嵌入层添加扰动）
+
+        参数:
+            emb_name: 嵌入层名称（默认'word_embeddings'）
+        """
+        # 遍历模型所有参数
         for name, param in self.model.named_parameters():
+            # 只对嵌入层进行对抗攻击
             if param.requires_grad and emb_name in name:
+                # 1. 备份原始嵌入参数
                 self.backup[name] = param.data.clone()
+                # 2. 计算梯度的L2范数
                 norm = torch.norm(param.grad)
+                # 3. 计算对抗扰动: r_adv = ε × grad / ||grad||
+                #    - 方向: 梯度方向（让loss增大的方向）
+                #    - 大小: ε（固定扰动强度）
                 if norm != 0 and not torch.isnan(norm):
                     r_at = self.epsilon * param.grad / norm
+                    # 4. 添加对抗扰动到嵌入层
                     param.data.add_(r_at)
 
     def restore(self, emb_name='word_embeddings'):
-        """恢复原始参数"""
+        """
+        恢复原始参数（移除对抗扰动）
+
+        参数:
+            emb_name: 嵌入层名称
+        """
+        # 从备份中恢复原始嵌入参数
         for name, param in self.model.named_parameters():
             if param.requires_grad and emb_name in name:
-                assert name in self.backup
-                param.data = self.backup[name]
-        self.backup = {}
+                assert name in self.backup  # 确保有备份
+                param.data = self.backup[name]  # 恢复原始参数
+        self.backup = {}  # 清空备份
 
 
 class EMA:
-    """指数移动平均，提升模型稳定性"""
+    """
+    Exponential Moving Average (EMA) - 指数移动平均
+
+    原理:
+    - 维护模型参数的移动平均值（影子参数）
+    - 每次更新: θ_ema = α × θ_ema + (1-α) × θ_current
+    - 测试时使用平滑后的参数而非训练时的参数
+
+    优势:
+    - 减少参数波动，提高模型稳定性
+    - 相当于对多个checkpoint的集成
+    - 通常能提升0.5-2%的性能
+
+    衰减系数α (decay):
+    - 通常设为0.999或0.9999
+    - 越大表示历史参数权重越高（更平滑）
+    - 越小表示当前参数权重越高（更灵活）
+    """
 
     def __init__(self, model, decay=0.999):
-        self.model = model
-        self.decay = decay
-        self.shadow = {}
-        self.backup = {}
-        self.register()
+        """
+        初始化EMA
+
+        参数:
+            model: PyTorch模型
+            decay: 衰减系数（0.999推荐）
+        """
+        self.model = model          # 要训练的模型
+        self.decay = decay          # 衰减系数α
+        self.shadow = {}            # 影子参数（EMA参数）
+        self.backup = {}            # 备份当前参数
+        self.register()             # 注册并初始化影子参数
 
     def register(self):
+        """注册模型参数，创建影子参数副本"""
         for name, param in self.model.named_parameters():
             if param.requires_grad:
+                # 初始化影子参数为当前参数的副本
                 self.shadow[name] = param.data.clone()
 
     def update(self):
+        """
+        更新影子参数（每次训练步后调用）
+
+        更新公式: θ_ema^(t) = α × θ_ema^(t-1) + (1-α) × θ^(t)
+        """
         for name, param in self.model.named_parameters():
             if param.requires_grad:
+                # 计算新的移动平均
+                # 例如: decay=0.999 表示保留99.9%的历史，加入0.1%的当前
                 new_average = (1.0 - self.decay) * param.data + self.decay * self.shadow[name]
+                # 更新影子参数
                 self.shadow[name] = new_average.clone()
 
     def apply_shadow(self):
+        """应用影子参数（验证/测试时调用）"""
         for name, param in self.model.named_parameters():
             if param.requires_grad:
+                # 备份当前训练参数
                 self.backup[name] = param.data
+                # 将模型参数替换为影子参数（EMA参数）
                 param.data = self.shadow[name]
 
     def restore(self):
+        """恢复训练参数（验证/测试后调用）"""
         for name, param in self.model.named_parameters():
             if param.requires_grad:
+                # 从备份恢复训练参数
                 param.data = self.backup[name]
-        self.backup = {}
+        self.backup = {}  # 清空备份
 
 
 class BERTClassifierOptimized:

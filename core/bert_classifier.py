@@ -37,23 +37,25 @@ class TitleDataset(Dataset):
         return len(self.titles)
     
     def __getitem__(self, idx):
-        title = self.titles[idx]
-        label = self.labels[idx]
-        
-        # 使用BERT分词器编码
+        """获取第 idx 个样本（PyTorch Dataset 必须实现的方法）"""
+        title = self.titles[idx]  # 获取第 idx 个标题文本
+        label = self.labels[idx]  # 获取对应的标签（0 或 1）
+
+        # 使用BERT分词器编码文本为模型输入格式
         encoding = self.tokenizer(
-            title,
-            add_special_tokens=True,
-            max_length=self.max_length,
-            padding='max_length',
-            truncation=True,
-            return_tensors='pt'
+            title,                          # 输入文本
+            add_special_tokens=True,        # 添加 [CLS] 和 [SEP] 特殊标记
+            max_length=self.max_length,     # 最大长度 64（超过会截断）
+            padding='max_length',           # 填充到最大长度（不足补 [PAD]）
+            truncation=True,                # 超过最大长度时截断
+            return_tensors='pt'             # 返回 PyTorch 张量格式
         )
-        
+
+        # 返回字典格式的数据（包含模型需要的所有输入）
         return {
-            'input_ids': encoding['input_ids'].flatten(),
-            'attention_mask': encoding['attention_mask'].flatten(),
-            'label': torch.tensor(label, dtype=torch.long)
+            'input_ids': encoding['input_ids'].flatten(),          # 词ID序列 [batch_size, seq_len]
+            'attention_mask': encoding['attention_mask'].flatten(), # 注意力掩码（1=真实词，0=填充）
+            'label': torch.tensor(label, dtype=torch.long)          # 标签（转为PyTorch张量）
         }
 
 
@@ -74,12 +76,17 @@ class BERTClassifier:
         self.model_name = model_name
         self.max_length = max_length
         
-        # 设置设备(GPU或CPU)
+        # ====================
+        # 设备配置: 自动检测并使用GPU或CPU
+        # ====================
+        # 检测是否有可用的CUDA GPU，有则用GPU加速训练（快10-100倍）
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         if torch.cuda.is_available():
-            print(f"使用设备: {self.device} ({torch.cuda.get_device_name(0)})")
-            print(f"GPU 内存: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.2f} GB")
+            # 打印GPU信息
+            print(f"使用设备: {self.device} ({torch.cuda.get_device_name(0)})")  # 显示GPU型号
+            print(f"GPU 内存: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.2f} GB")  # 显示显存大小
         else:
+            # 没有GPU，使用CPU（训练会比较慢）
             print(f"使用设备: {self.device}")
         
         # 加载分词器
@@ -124,23 +131,38 @@ class BERTClassifier:
         print(f"学习率: {learning_rate}")
         print(f"预热步数: {warmup_steps}")
 
-        # 创建数据集和数据加载器
+        # ====================
+        # 第1步: 创建数据集和数据加载器
+        # ====================
+        # 将标题和标签封装为 PyTorch Dataset
         dataset = TitleDataset(titles, labels, self.tokenizer, self.max_length)
+        # 创建 DataLoader 用于批次化加载数据
         dataloader = TorchDataLoader(
-            dataset,
-            batch_size=batch_size,
-            shuffle=True
+            dataset,                    # 数据集
+            batch_size=batch_size,      # 每批32个样本
+            shuffle=True                # 每个epoch打乱数据（防止过拟合）
         )
 
-        # 设置优化器
+        # ====================
+        # 第2步: 设置优化器（AdamW）
+        # ====================
+        # AdamW = Adam + Weight Decay（权重衰减，相当于L2正则化）
+        # 专为Transformer模型设计，效果优于SGD
         optimizer = AdamW(self.model.parameters(), lr=learning_rate)
 
-        # 设置学习率调度器（带预热）
+        # ====================
+        # 第3步: 设置学习率调度器（带预热）
+        # ====================
+        # 总训练步数 = 每个epoch的batch数 × epoch数
         total_steps = len(dataloader) * epochs
+        # 线性预热调度器：
+        # - 前warmup_steps步：学习率从0线性增加到lr
+        # - 后续步骤：学习率线性衰减到0
+        # 目的：避免训练初期学习率过大导致不稳定
         scheduler = get_linear_schedule_with_warmup(
             optimizer,
-            num_warmup_steps=warmup_steps,
-            num_training_steps=total_steps
+            num_warmup_steps=warmup_steps,   # 预热步数（前500步）
+            num_training_steps=total_steps   # 总步数
         )
         print(f"总训练步数: {total_steps}")
 
@@ -163,38 +185,51 @@ class BERTClassifier:
             progress_bar = tqdm(dataloader, desc=f"训练中")
             
             for batch_idx, batch in enumerate(progress_bar):
-                # 将数据移到设备上
-                input_ids = batch['input_ids'].to(self.device)
-                attention_mask = batch['attention_mask'].to(self.device)
-                batch_labels = batch['label'].to(self.device)
-                
-                # 前向传播
+                # --------------------
+                # 步骤1: 将数据移到GPU/CPU
+                # --------------------
+                input_ids = batch['input_ids'].to(self.device)          # 词ID序列 [batch_size, seq_len]
+                attention_mask = batch['attention_mask'].to(self.device) # 注意力掩码 [batch_size, seq_len]
+                batch_labels = batch['label'].to(self.device)            # 标签 [batch_size]
+
+                # --------------------
+                # 步骤2: 前向传播（Forward Pass）
+                # --------------------
+                # 将输入传入BERT模型，获得输出
                 outputs = self.model(
-                    input_ids=input_ids,
-                    attention_mask=attention_mask,
-                    labels=batch_labels
+                    input_ids=input_ids,              # 输入的词ID
+                    attention_mask=attention_mask,    # 告诉模型哪些是真实词（1）哪些是padding（0）
+                    labels=batch_labels               # 提供标签后模型会自动计算loss
                 )
-                
-                loss = outputs.loss
-                logits = outputs.logits
-                
-                # 反向传播
-                optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
-                scheduler.step()  # 更新学习率
 
-                # 统计
-                total_loss += loss.item()
-                predictions = torch.argmax(logits, dim=1)
+                loss = outputs.loss      # 交叉熵损失（已由模型自动计算）
+                logits = outputs.logits  # 模型输出的logits [batch_size, 2]（2个类别）
+
+                # --------------------
+                # 步骤3: 反向传播（Backward Pass）
+                # --------------------
+                optimizer.zero_grad()    # 清空之前的梯度（PyTorch会累积梯度）
+                loss.backward()          # 反向传播计算梯度
+                optimizer.step()         # 根据梯度更新模型参数
+                scheduler.step()         # 更新学习率（预热或衰减）
+
+                # --------------------
+                # 步骤4: 统计训练指标
+                # --------------------
+                total_loss += loss.item()  # 累加损失（用于计算平均损失）
+                # 预测类别 = logits最大值的索引（argmax）
+                predictions = torch.argmax(logits, dim=1)  # [batch_size]
+                # 计算预测正确的数量
                 correct_predictions += (predictions == batch_labels).sum().item()
-                total_predictions += batch_labels.size(0)
+                total_predictions += batch_labels.size(0)  # 累加总样本数
 
-                # 更新进度条（显示当前学习率）
+                # --------------------
+                # 步骤5: 更新进度条显示
+                # --------------------
                 progress_bar.set_postfix({
-                    'loss': f'{loss.item():.4f}',
-                    'acc': f'{correct_predictions/total_predictions:.4f}',
-                    'lr': f'{scheduler.get_last_lr()[0]:.2e}'
+                    'loss': f'{loss.item():.4f}',                         # 当前batch的损失
+                    'acc': f'{correct_predictions/total_predictions:.4f}', # 当前累计准确率
+                    'lr': f'{scheduler.get_last_lr()[0]:.2e}'             # 当前学习率（科学计数法）
                 })
 
             # 计算平均损失和准确率

@@ -41,19 +41,28 @@ class DataLoader:
         """
         预处理单个标题:转小写、移除特殊字符
 
+        处理步骤:
+        1. 转换为小写 - 统一大小写，避免同一个词因大小写不同而被视为不同特征
+        2. 移除特殊字符 - 只保留字母、数字和空格，去除标点符号等噪声
+        3. 移除多余空格 - 将连续的空格合并为单个空格，清理格式
+
         参数:
             title: 原始标题字符串
 
         返回:
-            预处理后的标题
+            预处理后的标题 (小写、无特殊字符、无多余空格)
         """
-        # 转换为小写
+        # 步骤1: 转换为小写 (例如: "Deep Learning" -> "deep learning")
         title = title.lower()
 
-        # 移除特殊字符但保留空格
+        # 步骤2: 移除特殊字符但保留空格
+        # 正则表达式 [^a-z0-9\s] 匹配所有不是小写字母、数字或空格的字符
+        # 将它们替换为空格 (例如: "hello, world!" -> "hello  world ")
         title = re.sub(r'[^a-z0-9\s]', ' ', title)
 
-        # 移除多余空格
+        # 步骤3: 移除多余空格
+        # split() 会按空格分割并自动去除空字符串
+        # join() 用单个空格重新连接 (例如: "hello  world " -> "hello world")
         title = ' '.join(title.split())
 
         return title
@@ -81,12 +90,21 @@ class DataLoader:
 
         loader = DataLoader()
 
-        # 加载训练数据
+        # ====================
+        # 第1步: 加载训练数据
+        # ====================
+        # 正样本: 正确提取的学术标题
         positive_titles = loader.load_titles(positive_file)
+        # 负样本: 错误提取的标题片段、元数据等
         negative_titles = loader.load_titles(negative_file)
 
-        # 创建训练集
+        # ====================
+        # 第2步: 创建训练集
+        # ====================
+        # 合并正负样本为完整训练集
         train_titles = positive_titles + negative_titles
+        # 创建对应标签: 1表示正确标题, 0表示错误标题
+        # [1, 1, ..., 1, 0, 0, ..., 0]
         train_labels = [1] * len(positive_titles) + [0] * len(negative_titles)
 
         # 加载测试数据 (Excel格式)

@@ -83,48 +83,73 @@ class Word2VecSVMClassifier:
         """
         提取标题的统计特征（特征工程）
 
+        这些手工设计的特征能够捕捉错误标题的模式特征：
+        - 错误标题可能过长（包含多个片段）或过短（只有部分词）
+        - 错误标题可能包含大量数字（如页码、卷号）
+        - 错误标题可能有异常的大小写模式（全大写的元数据）
+        - 错误标题可能包含异常的特殊符号
+
         参数:
             title: 输入标题
 
         返回:
-            统计特征向量 [8维]
+            统计特征向量 [8维] - 与词向量拼接后作为SVM的输入
         """
         features = []
 
-        # 1. 标题长度（词数）- 错误标题往往过长或过短
+        # ====================
+        # 特征1: 标题长度（词数）
+        # ====================
+        # 正常标题一般5-15个词，错误标题可能只有1-2个词或超过20个词
+        # 例如: "Abstract" (1词，错误) vs "Deep Learning for Image Recognition" (6词，正确)
         words = title.split()
         features.append(len(words))
 
-        # 2. 平均词长 - 错误标题可能有异常词长
+        # ====================
+        # 特征2: 平均词长
+        # ====================
+        # 正常单词平均5-7个字母，异常长的词可能是错误提取的合并词
+        # 例如: "ImageNetClassificationWithDeepConvolutionalNeuralNetworks"
         if words:
             features.append(np.mean([len(w) for w in words]))
         else:
             features.append(0)
 
-        # 3. 大写字母比例 - 错误标题可能全大写或无大写
+        # ====================
+        # 特征3: 大写字母比例
+        # ====================
+        # 正常标题首字母大写，错误标题可能全大写(元数据)或全小写(片段)
+        # 例如: "IEEE TRANSACTIONS ON..." (错误，全大写)
         if len(title) > 0:
             features.append(sum(1 for c in title if c.isupper()) / len(title))
         else:
             features.append(0)
 
-        # 4. 数字比例 - 错误标题可能包含大量数字
+        # ====================
+        # 特征4: 数字比例
+        # ====================
+        # 正常标题很少包含数字，错误标题可能包含页码、卷号、年份等
+        # 例如: "pp. 1-25, Vol. 3, 2024" (错误，大量数字)
         if len(title) > 0:
             features.append(sum(1 for c in title if c.isdigit()) / len(title))
         else:
             features.append(0)
 
-        # 5. 特殊字符数量 - 错误标题可能有异常符号
+        # ====================
+        # 特征5: 特殊字符数量
+        # ====================
+        # 正常标题特殊字符少，错误标题可能有连续的点、破折号等
+        # 例如: "........." 或 "---Appendix---"
         special_chars = sum(1 for c in title if not c.isalnum() and not c.isspace())
         features.append(special_chars)
 
-        # 6. 是否包含数字 - 布尔特征
-        features.append(1 if any(c.isdigit() for c in title) else 0)
-
-        # 7. 是否全大写 - 布尔特征
-        features.append(1 if title.isupper() else 0)
-
-        # 8. 是否全小写 - 布尔特征
-        features.append(1 if title.islower() else 0)
+        # ====================
+        # 特征6-8: 布尔特征
+        # ====================
+        # 这些二值特征帮助识别明显的模式
+        features.append(1 if any(c.isdigit() for c in title) else 0)  # 是否包含数字
+        features.append(1 if title.isupper() else 0)                  # 是否全大写
+        features.append(1 if title.islower() else 0)                  # 是否全小写
 
         return np.array(features)
 

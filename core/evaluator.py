@@ -47,24 +47,45 @@ class ModelEvaluator:
             print(f" {model_name} - 评估结果")
             print(f"{'='*70}")
         
-        # ===== 计算基本指标 =====
+        # ====================
+        # 第1步: 计算基本分类指标
+        # ====================
+        # 准确率 = 预测正确的样本数 / 总样本数
         accuracy = accuracy_score(y_true, y_pred)
-        
-        # 计算精确率、召回率和F1分数(针对正类,即label=1)
+
+        # 针对正类（label=1，即正确标题）计算指标
+        # 精确率 = TP / (TP + FP) - 预测为正例中真正例的比例
         precision = precision_score(y_true, y_pred, pos_label=1, zero_division=0)
+        # 召回率 = TP / (TP + FN) - 真正例中被预测出的比例
         recall = recall_score(y_true, y_pred, pos_label=1, zero_division=0)
+        # F1分数 = 2 * P * R / (P + R) - 精确率和召回率的调和平均
         f1 = f1_score(y_true, y_pred, pos_label=1, zero_division=0)
-        
-        # 计算宏平均和微平均F1分数
+
+        # ====================
+        # 第2步: 计算平均F1分数
+        # ====================
+        # 宏平均（Macro）: 每个类别的F1分数算术平均，适合类别不平衡时评估
         f1_macro = f1_score(y_true, y_pred, average='macro', zero_division=0)
+        # 微平均（Micro）: 全局计算TP/FP/FN然后算F1，等于准确率
         f1_micro = f1_score(y_true, y_pred, average='micro', zero_division=0)
-        
-        # 计算每个类别的精确率、召回率和F1
+
+        # ====================
+        # 第3步: 计算每个类别的指标
+        # ====================
+        # 返回 [负类精确率, 正类精确率]
         precision_per_class = precision_score(y_true, y_pred, average=None, zero_division=0)
+        # 返回 [负类召回率, 正类召回率]
         recall_per_class = recall_score(y_true, y_pred, average=None, zero_division=0)
+        # 返回 [负类F1, 正类F1]
         f1_per_class = f1_score(y_true, y_pred, average=None, zero_division=0)
-        
-        # 混淆矩阵
+
+        # ====================
+        # 第4步: 计算混淆矩阵
+        # ====================
+        # 混淆矩阵格式:
+        #           预测0  预测1
+        # 实际0      TN    FP
+        # 实际1      FN    TP
         cm = confusion_matrix(y_true, y_pred)
         
         if verbose:
@@ -96,10 +117,15 @@ class ModelEvaluator:
             print(f"{'实际为负':<15} {cm[0][0]:<15} {cm[0][1]:<15}")
             print(f"{'实际为正':<15} {cm[1][0]:<15} {cm[1][1]:<15}")
             
-            # 计算并打印更多指标
+            # ====================
+            # 第5步: 从混淆矩阵提取详细指标
+            # ====================
+            # cm.ravel() 将2x2矩阵展平为一维数组 [TN, FP, FN, TP]
             tn, fp, fn, tp = cm.ravel()
+            # 特异度 = TN / (TN + FP) - 真负例中被正确识别的比例（负类的召回率）
             specificity = tn / (tn + fp) if (tn + fp) > 0 else 0
-            sensitivity = tp / (tp + fn) if (tp + fn) > 0 else 0  # 等同于召回率
+            # 敏感度 = TP / (TP + FN) - 真正例中被正确识别的比例（等同于召回率）
+            sensitivity = tp / (tp + fn) if (tp + fn) > 0 else 0
             
             print("\n【附加指标】")
             print(f"  真负例 (TN):           {tn}")

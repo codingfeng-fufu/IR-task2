@@ -138,32 +138,69 @@ class ResultVisualizer:
             vectors: np.ndarray, labels: List[int], title: str,
             save_path='tsne_visualization.png', perplexity=30, n_iter=1000
     ):
-        """使用t-SNE将高维向量可视化到2D空间"""
+        """
+        使用t-SNE将高维向量可视化到2D空间
+
+        t-SNE (t-distributed Stochastic Neighbor Embedding):
+        - 降维算法，将高维数据（如100维词向量或768维BERT向量）映射到2D/3D
+        - 保持数据点之间的相对距离关系
+        - 用于可视化特征空间的聚类效果
+        """
         print(f"\n生成t-SNE可视化图: {title}...")
 
+        # ====================
+        # 第1步: 创建t-SNE降维器
+        # ====================
         tsne = TSNE(
-            n_components=2, random_state=42,
-            perplexity=min(perplexity, len(vectors) - 1),
-            max_iter=n_iter, verbose=0
+            n_components=2,                                  # 降到2维（用于2D平面绘图）
+            random_state=42,                                 # 随机种子（保证可复现）
+            perplexity=min(perplexity, len(vectors) - 1),  # 困惑度（平衡局部和全局结构）
+            max_iter=n_iter,                                 # 最大迭代次数（1000次通常足够收敛）
+            verbose=0                                        # 不打印训练日志
         )
+        # 执行降维：将 [n_samples, n_features] 转为 [n_samples, 2]
         vectors_2d = tsne.fit_transform(vectors)
 
-        fig, ax = plt.subplots(figsize=(12, 9))
+        # ====================
+        # 第2步: 创建画布
+        # ====================
+        fig, ax = plt.subplots(figsize=(12, 9))  # 创建12x9英寸的图表
 
-        labels = np.array(labels)
-        neg_mask = labels == 0
-        pos_mask = labels == 1
+        # ====================
+        # 第3步: 分离不同类别的数据点
+        # ====================
+        labels = np.array(labels)  # 转为numpy数组便于布尔索引
+        neg_mask = labels == 0     # 负样本（错误标题）的布尔掩码
+        pos_mask = labels == 1     # 正样本（正确标题）的布尔掩码
 
+        # ====================
+        # 第4步: 绘制负样本（错误标题）散点图
+        # ====================
         ax.scatter(
-            vectors_2d[neg_mask, 0], vectors_2d[neg_mask, 1],
-            c='#e74c3c', label='Negative (错误标题)',
-            alpha=0.6, s=80, edgecolors='black', linewidth=0.5, marker='o'
+            vectors_2d[neg_mask, 0],     # X坐标（t-SNE第1维）
+            vectors_2d[neg_mask, 1],     # Y坐标（t-SNE第2维）
+            c='#e74c3c',                  # 红色
+            label='Negative (错误标题)', # 图例标签
+            alpha=0.6,                    # 透明度60%（避免重叠遮挡）
+            s=80,                         # 点大小
+            edgecolors='black',           # 黑色边框（使点更清晰）
+            linewidth=0.5,                # 边框宽度
+            marker='o'                    # 圆形标记
         )
 
+        # ====================
+        # 第5步: 绘制正样本（正确标题）散点图
+        # ====================
         ax.scatter(
-            vectors_2d[pos_mask, 0], vectors_2d[pos_mask, 1],
-            c='#2ecc71', label='Positive (正确标题)',
-            alpha=0.6, s=80, edgecolors='black', linewidth=0.5, marker='^'
+            vectors_2d[pos_mask, 0],     # X坐标
+            vectors_2d[pos_mask, 1],     # Y坐标
+            c='#2ecc71',                  # 绿色
+            label='Positive (正确标题)', # 图例标签
+            alpha=0.6,                    # 透明度60%
+            s=80,                         # 点大小
+            edgecolors='black',           # 黑色边框
+            linewidth=0.5,                # 边框宽度
+            marker='^'                    # 三角形标记（与负样本区分）
         )
 
         ax.set_title(
