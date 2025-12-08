@@ -87,7 +87,7 @@ class BERTClassifier:
         
         # Load tokenizer
         print("Loading BERT tokenizer...")
-        self.tokenizer = BertTokenizer.from_pretrained(model_name)
+        self.tokenizer = BertTokenizer.from_pretrained(model_name, local_files_only=True)
 
         # Load classification model
         print("Loading BERT classification model...")
@@ -95,11 +95,12 @@ class BERTClassifier:
             model_name,
             num_labels=2,  # Binary classification
             output_attentions=False,
-            output_hidden_states=False
+            output_hidden_states=False,
+            local_files_only=True
         ).to(self.device)
 
         # Model for feature extraction (without classification head)
-        self.feature_model = BertModel.from_pretrained(model_name).to(self.device)
+        self.feature_model = BertModel.from_pretrained(model_name, local_files_only=True).to(self.device)
         
         # Training status
         self.is_trained = False

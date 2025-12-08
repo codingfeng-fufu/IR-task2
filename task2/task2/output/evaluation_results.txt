@@ -13,22 +13,22 @@ Model: Naive Bayes
 --------------------------------------------------------------------------------
 
 Model: Word2Vec+SVM
-  Accuracy:  0.8299
-  Precision: 0.8372
-  Recall:    0.8785
-  F1 Score:  0.8574
-  F1 Macro:  0.8234
-  F1 Micro:  0.8299
+  Accuracy:  0.8248
+  Precision: 0.8359
+  Recall:    0.8697
+  F1 Score:  0.8525
+  F1 Macro:  0.8184
+  F1 Micro:  0.8248
 
 --------------------------------------------------------------------------------
 
 Model: BERT
-  Accuracy:  0.8791
-  Precision: 0.8975
-  Recall:    0.8944
-  F1 Score:  0.8959
-  F1 Macro:  0.8758
-  F1 Micro:  0.8791
+  Accuracy:  0.8525
+  Precision: 0.9257
+  Recall:    0.8116
+  F1 Score:  0.8649
+  F1 Macro:  0.8512
+  F1 Micro:  0.8525
 
 --------------------------------------------------------------------------------
 

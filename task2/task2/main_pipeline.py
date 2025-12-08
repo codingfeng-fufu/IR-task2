@@ -13,7 +13,7 @@ warnings.filterwarnings('ignore')
 
 # 导入自定义模块
 from data_loader import DataLoader, create_sample_data
-from naive_bayes_classifier import NaiveBayesClassifier
+from naive_bayes_classifier_optimized import NaiveBayesClassifierOptimized  # 使用优化版本
 from word2vec_svm_classifier import Word2VecSVMClassifier
 from evaluator import ModelEvaluator
 from visualizer import ResultVisualizer
@@ -28,7 +28,7 @@ def print_header():
     print("\n项目描述:")
     print("  识别CiteSeer数据库中错误提取的学术论文标题")
     print("  使用三种机器学习方法:")
-    print("    1. 朴素贝叶斯 (Naive Bayes)")
+    print("    1. 朴素贝叶斯 (Naive Bayes - 优化版)")
     print("    2. Word2Vec + SVM")
     print("    3. BERT (Transformer)")
     print("\n" + "="*80 + "\n")
@@ -83,13 +83,22 @@ def load_data(use_sample_data: bool = False, max_train_samples: int = None):
 
 
 def train_naive_bayes(train_titles: List[str], train_labels: List[int]):
-    """训练朴素贝叶斯分类器"""
-    print("\n[步骤 2/5] 训练朴素贝叶斯分类器")
+    """训练朴素贝叶斯分类器（优化版）"""
+    print("\n[步骤 2/5] 训练朴素贝叶斯分类器（优化版）")
     print("-" * 80)
-    
-    classifier = NaiveBayesClassifier(max_features=5000, ngram_range=(1, 2))
+
+    classifier = NaiveBayesClassifierOptimized(
+        max_features_word=10000,
+        max_features_char=5000,
+        word_ngram_range=(1, 3),
+        char_ngram_range=(3, 5),
+        alpha=0.5,
+        use_complement_nb=True,
+        add_statistical_features=True,
+        model_path='models/naive_bayes_optimized_model.pkl'
+    )
     classifier.train(train_titles, train_labels)
-    
+
     return classifier
 
 

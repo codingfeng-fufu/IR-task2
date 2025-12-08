@@ -1,0 +1,52 @@
+{
+  "comment": "LLM API配置文件 - 中国大模型版本 - 已填写API密钥",
+  "llms": {
+    "glm-4.6": {
+      "provider": "openai",
+      "model": "glm-4-plus",
+      "api_key": "11608cdf06a6428c859c587b063596a2.ulxJ1dYS09o5wkq5",
+      "base_url": "https://open.bigmodel.cn/api/paas/v4/",
+      "temperature": 0.0,
+      "max_tokens": 150,
+      "enabled": true,
+      "comment": "智谱AI GLM-4.6 (glm-4-plus) - 最新版本"
+    },
+    "qwen3": {
+      "provider": "openai",
+      "model": "qwen-turbo",
+      "api_key": "sk-5fb6a8c8d48e45f193447ba71264c771",
+      "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "temperature": 0.0,
+      "max_tokens": 150,
+      "enabled": true,
+      "comment": "阿里云通义千问Qwen3-Turbo - 非推理模型"
+    },
+    "kimi": {
+      "provider": "openai",
+      "model": "kimi-k2-turbo-preview",
+      "api_key": "sk-jPwHDgMKXjkAYPTtybgL35LcjHUwOtScRMgdBLEXmMLAcU26",
+      "base_url": "https://api.moonshot.cn/v1",
+      "temperature": 0.0,
+      "max_tokens": 150,
+      "enabled": true,
+      "comment": "Moonshot AI Kimi-K2-Turbo-Preview - 非推理模型"
+    },
+    "deepseek": {
+      "provider": "openai",
+      "model": "deepseek-chat",
+      "api_key": "sk-85a51e89638b4047ab924e098aed610b",
+      "base_url": "https://api.deepseek.com",
+      "temperature": 0.0,
+      "max_tokens": 150,
+      "enabled": true,
+      "comment": "DeepSeek Chat - 非推理模型，性价比之王"
+    }
+  },
+  "experiment": {
+    "few_shot_examples": 8,
+    "sample_size": 976,
+    "delay_between_calls": 0.5,
+    "output_dir": "output/llm_experiments",
+    "comment": "使用实际测试集大小976，全部使用非推理模型"
+  }
+}
