@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# IDE
+.idea/
+
+# Virtual Environment
+.venv/
+venv/
+
+# Logs
+*.log
+logs/
+nohup.out
+
+# Data directory - 大型数据文件不上传
+data/*.txt
+data/*.xlsx
+!data/.gitkeep
+
+# Models - 模型文件太大不上传
+models/*.pt
+models/*.pkl
+models/*.model
+models/experiments/*.pt
+!models/.gitkeep
+!models/experiments/.gitkeep
+
+# Stages directory models - stages目录下的模型文件也不上传
+stages/*/models/*.pt
+stages/*/models/*.pkl
+stages/*/models/*.model
+stages/*/models/*/*.pt
+stages/*/models/*/*.pkl
+
+# System
+.DS_Store
+
+# 其他大型文件
+gensim-data/
+nltk_data/
+checkpoints/
+*.tar.gz
