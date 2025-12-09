@@ -1,0 +1,796 @@
+"""
+train_bert_optimized_v2.py
+==========================
+BERT深度优化训练脚本
+实现多种优化策略以提升召回率和整体性能
+
+优化内容:
+1. SciBERT模型 (学术领域专用)
+2. 验证集+Early Stopping
+3. 类别权重/Focal Loss (提升召回率)
+4. 调整max_length到96
+5. Cosine学习率调度
+6. Layer-wise学习率衰减
+7. 对抗训练(可选)
+8. 混合精度训练
+"""
+
+import numpy as np
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import os
+from typing import List, Dict, Optional, Tuple
+from transformers import (
+    AutoTokenizer,
+    AutoModel,
+    AutoModelForSequenceClassification,
+    get_linear_schedule_with_warmup,
+    get_cosine_schedule_with_warmup
+)
+from torch.utils.data import Dataset, DataLoader as TorchDataLoader
+from torch.optim import AdamW
+from torch.cuda.amp import autocast, GradScaler
+from tqdm import tqdm
+# 手动实现train_test_split避免sklearn依赖问题
+def manual_train_test_split(titles, labels, test_size=0.1, random_state=42):
+    import random
+    random.seed(random_state)
+    indices = list(range(len(titles)))
+    random.shuffle(indices)
+    split_idx = int(len(indices) * (1 - test_size))
+    train_idx = indices[:split_idx]
+    test_idx = indices[split_idx:]
+    return ([titles[i] for i in train_idx], [titles[i] for i in test_idx],
+            [labels[i] for i in train_idx], [labels[i] for i in test_idx])
+
+# 手动实现metrics避免sklearn依赖
+def calculate_metrics(y_true, y_pred):
+    y_true = np.array(y_true)
+    y_pred = np.array(y_pred)
+    tp = np.sum((y_true == 1) & (y_pred == 1))
+    tn = np.sum((y_true == 0) & (y_pred == 0))
+    fp = np.sum((y_true == 0) & (y_pred == 1))
+    fn = np.sum((y_true == 1) & (y_pred == 0))
+
+    accuracy = (tp + tn) / len(y_true)
+    precision = tp / (tp + fp) if (tp + fp) > 0 else 0
+    recall = tp / (tp + fn) if (tp + fn) > 0 else 0
+    f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0
+
+    return {
+        'accuracy': accuracy,
+        'precision': precision,
+        'recall': recall,
+        'f1': f1,
+        'confusion_matrix': [[tn, fp], [fn, tp]]
+    }
+
+import warnings
+warnings.filterwarnings('ignore')
+
+
+class TitleDataset(Dataset):
+    """PyTorch dataset for BERT model"""
+
+    def __init__(self, titles: List[str], labels: List[int], tokenizer, max_length=96):
+        self.titles = titles
+        self.labels = labels
+        self.tokenizer = tokenizer
+        self.max_length = max_length
+
+    def __len__(self):
+        return len(self.titles)
+
+    def __getitem__(self, idx):
+        title = self.titles[idx]
+        label = self.labels[idx]
+
+        encoding = self.tokenizer(
+            title,
+            add_special_tokens=True,
+            max_length=self.max_length,
+            padding='max_length',
+            truncation=True,
+            return_tensors='pt'
+        )
+
+        return {
+            'input_ids': encoding['input_ids'].flatten(),
+            'attention_mask': encoding['attention_mask'].flatten(),
+            'label': torch.tensor(label, dtype=torch.long)
+        }
+
+
+class FocalLoss(nn.Module):
+    """
+    Focal Loss for addressing class imbalance
+    重点关注难分样本,提升召回率
+    """
+    def __init__(self, alpha=0.25, gamma=2.0, reduction='mean'):
+        super().__init__()
+        self.alpha = alpha
+        self.gamma = gamma
+        self.reduction = reduction
+
+    def forward(self, inputs, targets):
+        ce_loss = F.cross_entropy(inputs, targets, reduction='none')
+        pt = torch.exp(-ce_loss)
+        focal_loss = self.alpha * (1 - pt) ** self.gamma * ce_loss
+
+        if self.reduction == 'mean':
+            return focal_loss.mean()
+        elif self.reduction == 'sum':
+            return focal_loss.sum()
+        else:
+            return focal_loss
+
+
+class FGM:
+    """
+    Fast Gradient Method 对抗训练
+    提高模型鲁棒性和泛化能力
+    """
+    def __init__(self, model, epsilon=1.0):
+        self.model = model
+        self.epsilon = epsilon
+        self.backup = {}
+
+    def attack(self, emb_name='embeddings'):
+        for name, param in self.model.named_parameters():
+            if param.requires_grad and emb_name in name:
+                self.backup[name] = param.data.clone()
+                norm = torch.norm(param.grad)
+                if norm != 0 and not torch.isnan(norm):
+                    r_at = self.epsilon * param.grad / norm
+                    param.data.add_(r_at)
+
+    def restore(self, emb_name='embeddings'):
+        for name, param in self.model.named_parameters():
+            if param.requires_grad and emb_name in name:
+                if name in self.backup:
+                    param.data = self.backup[name]
+        self.backup = {}
+
+
+class OptimizedBERTClassifier:
+    """
+    深度优化的BERT分类器
+    """
+
+    MODEL_OPTIONS = {
+        'scibert': 'allenai/scibert_scivocab_uncased',  # ⭐⭐⭐⭐⭐ 学术论文专用
+        'roberta': 'roberta-base',                       # ⭐⭐⭐⭐ 优秀性能
+        'bert-base': 'bert-base-uncased',                # ⭐⭐⭐ Baseline
+    }
+
+    def __init__(
+        self,
+        model_name='scibert',
+        max_length=96,  # 增加到96以覆盖90%+的标题
+        model_path='models/bert_optimized_v2.pt',
+        dropout_rate=0.2
+    ):
+        """初始化优化的BERT分类器"""
+
+        # 解析模型名称
+        if model_name in self.MODEL_OPTIONS:
+            self.model_name = self.MODEL_OPTIONS[model_name]
+            print(f"✓ 使用模型: {model_name} ({self.model_name})")
+        else:
+            self.model_name = model_name
+            print(f"✓ 使用自定义模型: {self.model_name}")
+
+        self.max_length = max_length
+        self.model_path = model_path
+        self.dropout_rate = dropout_rate
+
+        # 设置设备
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        if torch.cuda.is_available():
+            print(f"✓ GPU: {torch.cuda.get_device_name(0)}")
+            print(f"✓ GPU内存: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.2f} GB")
+        else:
+            print(f"⚠️  使用CPU (训练会很慢)")
+
+        # 加载tokenizer
+        print(f"加载tokenizer...")
+        self.tokenizer = AutoTokenizer.from_pretrained(self.model_name, local_files_only=True)
+
+        # 加载模型
+        print(f"加载分类模型...")
+        self.model = AutoModelForSequenceClassification.from_pretrained(
+            self.model_name,
+            num_labels=2,
+            hidden_dropout_prob=dropout_rate,
+            attention_probs_dropout_prob=dropout_rate,
+            output_attentions=False,
+            output_hidden_states=False,
+            local_files_only=True
+        ).to(self.device)
+
+        # 特征提取模型
+        self.feature_model = AutoModel.from_pretrained(self.model_name, local_files_only=True).to(self.device)
+
+        self.is_trained = False
+        self.training_history = {
+            'train_loss': [], 'train_acc': [], 'train_f1': [],
+            'val_loss': [], 'val_acc': [], 'val_f1': [], 'val_recall': [], 'val_precision': []
+        }
+
+    def get_layer_wise_optimizer(self, learning_rate=2e-5, weight_decay=0.01, layer_decay=0.95):
+        """
+        Layer-wise学习率衰减
+        底层(靠近输入)学习率小,顶层(靠近输出)学习率大
+        """
+        no_decay = ["bias", "LayerNorm.weight"]
+        optimizer_grouped_parameters = []
+
+        # 获取encoder层数
+        if hasattr(self.model, 'bert'):
+            encoder = self.model.bert.encoder
+            embeddings = self.model.bert.embeddings
+        elif hasattr(self.model, 'roberta'):
+            encoder = self.model.roberta.encoder
+            embeddings = self.model.roberta.embeddings
+        elif hasattr(self.model, 'deberta'):
+            encoder = self.model.deberta.encoder
+            embeddings = self.model.deberta.embeddings
+        else:
+            print("⚠️  未识别的模型架构,使用标准优化器")
+            return AdamW(self.model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+
+        num_layers = len(encoder.layer)
+
+        # Embeddings层
+        optimizer_grouped_parameters.append({
+            "params": [p for n, p in embeddings.named_parameters() if not any(nd in n for nd in no_decay)],
+            "weight_decay": weight_decay,
+            "lr": learning_rate * (layer_decay ** num_layers)
+        })
+
+        # Encoder各层
+        for i in range(num_layers):
+            optimizer_grouped_parameters.append({
+                "params": [p for n, p in encoder.layer[i].named_parameters() if not any(nd in n for nd in no_decay)],
+                "weight_decay": weight_decay,
+                "lr": learning_rate * (layer_decay ** (num_layers - 1 - i))
+            })
+            optimizer_grouped_parameters.append({
+                "params": [p for n, p in encoder.layer[i].named_parameters() if any(nd in n for nd in no_decay)],
+                "weight_decay": 0.0,
+                "lr": learning_rate * (layer_decay ** (num_layers - 1 - i))
+            })
+
+        # 分类头(最高学习率)
+        optimizer_grouped_parameters.append({
+            "params": self.model.classifier.parameters(),
+            "weight_decay": 0.0,
+            "lr": learning_rate * 10
+        })
+
+        print(f"✓ 使用Layer-wise学习率衰减 (decay={layer_decay})")
+        print(f"  - Embeddings层: {learning_rate * (layer_decay ** num_layers):.2e}")
+        print(f"  - 顶层Encoder: {learning_rate:.2e}")
+        print(f"  - 分类头: {learning_rate * 10:.2e}")
+
+        return AdamW(optimizer_grouped_parameters, lr=learning_rate)
+
+    def train(
+        self,
+        train_titles: List[str],
+        train_labels: List[int],
+        val_ratio=0.1,
+        epochs=10,
+        batch_size=32,
+        learning_rate=2e-5,
+        warmup_ratio=0.1,
+        scheduler_type='cosine',  # 'linear' or 'cosine'
+        loss_type='focal',  # 'ce', 'weighted_ce', or 'focal'
+        class_weight_positive=1.3,  # 正样本权重(提升召回率)
+        focal_alpha=0.25,
+        focal_gamma=2.0,
+        early_stopping_patience=3,
+        use_layer_wise_lr=True,
+        layer_decay=0.95,
+        use_adversarial=True,  # 对抗训练
+        adv_epsilon=1.0,
+        use_mixed_precision=True,  # 混合精度
+        max_grad_norm=1.0,
+        save_model=True
+    ):
+        """
+        训练优化的BERT模型
+
+        Args:
+            train_titles: 训练标题列表
+            train_labels: 训练标签列表
+            val_ratio: 验证集比例
+            epochs: 训练轮数
+            batch_size: 批次大小
+            learning_rate: 学习率
+            warmup_ratio: warmup比例
+            scheduler_type: 学习率调度器类型
+            loss_type: 损失函数类型
+            class_weight_positive: 正样本权重
+            focal_alpha: Focal Loss的alpha参数
+            focal_gamma: Focal Loss的gamma参数
+            early_stopping_patience: Early stopping耐心值
+            use_layer_wise_lr: 是否使用layer-wise学习率
+            layer_decay: Layer-wise衰减率
+            use_adversarial: 是否使用对抗训练
+            adv_epsilon: 对抗训练的epsilon
+            use_mixed_precision: 是否使用混合精度训练
+            max_grad_norm: 梯度裁剪阈值
+            save_model: 是否保存模型
+        """
+        print("\n" + "="*80)
+        print(" 🚀 BERT深度优化训练")
+        print("="*80)
+        print(f"模型: {self.model_name}")
+        print(f"总样本: {len(train_titles)}")
+        print(f"验证集比例: {val_ratio}")
+        print(f"Max Length: {self.max_length}")
+        print(f"Epochs: {epochs}")
+        print(f"Batch Size: {batch_size}")
+        print(f"Learning Rate: {learning_rate}")
+        print(f"Scheduler: {scheduler_type}")
+        print(f"Loss Type: {loss_type}")
+        if loss_type == 'focal':
+            print(f"Focal Loss: alpha={focal_alpha}, gamma={focal_gamma}")
+        elif loss_type == 'weighted_ce':
+            print(f"Class Weight: [1.0, {class_weight_positive}]")
+        print(f"Early Stopping: {early_stopping_patience}")
+        print(f"Layer-wise LR: {use_layer_wise_lr}")
+        print(f"对抗训练: {use_adversarial}")
+        print(f"混合精度: {use_mixed_precision}")
+        print("="*80)
+
+        # 划分训练集和验证集
+        train_X, val_X, train_y, val_y = manual_train_test_split(
+            train_titles, train_labels,
+            test_size=val_ratio,
+            random_state=42
+        )
+
+        print(f"\n数据划分:")
+        print(f"  训练集: {len(train_X)} 样本")
+        print(f"  验证集: {len(val_X)} 样本")
+        print(f"  训练集正负比: {sum(train_y)}/{len(train_y)-sum(train_y)} = {sum(train_y)/(len(train_y)-sum(train_y)):.2f}")
+        print(f"  验证集正负比: {sum(val_y)}/{len(val_y)-sum(val_y)} = {sum(val_y)/(len(val_y)-sum(val_y)):.2f}")
+
+        # 创建数据加载器
+        train_dataset = TitleDataset(train_X, train_y, self.tokenizer, self.max_length)
+        val_dataset = TitleDataset(val_X, val_y, self.tokenizer, self.max_length)
+
+        train_dataloader = TorchDataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+        val_dataloader = TorchDataLoader(val_dataset, batch_size=batch_size, shuffle=False)
+
+        # 设置优化器
+        if use_layer_wise_lr:
+            optimizer = self.get_layer_wise_optimizer(learning_rate, weight_decay=0.01, layer_decay=layer_decay)
+        else:
+            optimizer = AdamW(self.model.parameters(), lr=learning_rate, weight_decay=0.01)
+
+        # 设置学习率调度器
+        total_steps = len(train_dataloader) * epochs
+        warmup_steps = int(total_steps * warmup_ratio)
+
+        if scheduler_type == 'cosine':
+            scheduler = get_cosine_schedule_with_warmup(
+                optimizer,
+                num_warmup_steps=warmup_steps,
+                num_training_steps=total_steps
+            )
+        else:
+            scheduler = get_linear_schedule_with_warmup(
+                optimizer,
+                num_warmup_steps=warmup_steps,
+                num_training_steps=total_steps
+            )
+
+        print(f"\n训练配置:")
+        print(f"  总步数: {total_steps}")
+        print(f"  Warmup步数: {warmup_steps}")
+
+        # 设置损失函数
+        if loss_type == 'focal':
+            criterion = FocalLoss(alpha=focal_alpha, gamma=focal_gamma)
+            print(f"  使用Focal Loss (alpha={focal_alpha}, gamma={focal_gamma})")
+        elif loss_type == 'weighted_ce':
+            class_weights = torch.tensor([1.0, class_weight_positive]).to(self.device)
+            criterion = nn.CrossEntropyLoss(weight=class_weights)
+            print(f"  使用加权交叉熵 (正样本权重={class_weight_positive})")
+        else:
+            criterion = nn.CrossEntropyLoss()
+            print(f"  使用标准交叉熵")
+
+        # 对抗训练
+        fgm = FGM(self.model, epsilon=adv_epsilon) if use_adversarial else None
+
+        # 混合精度
+        scaler = GradScaler() if use_mixed_precision else None
+
+        # Early stopping
+        best_val_f1 = 0.0
+        best_val_recall = 0.0
+        patience_counter = 0
+
+        # 训练循环
+        self.model.train()
+
+        for epoch in range(epochs):
+            print(f"\n{'='*80}")
+            print(f"📊 Epoch {epoch + 1}/{epochs}")
+            print(f"{'='*80}")
+
+            # 训练阶段
+            total_loss = 0
+            all_predictions = []
+            all_labels = []
+
+            progress_bar = tqdm(train_dataloader, desc="Training")
+
+            for batch_idx, batch in enumerate(progress_bar):
+                input_ids = batch['input_ids'].to(self.device)
+                attention_mask = batch['attention_mask'].to(self.device)
+                labels = batch['label'].to(self.device)
+
+                optimizer.zero_grad()
+
+                # 前向传播(混合精度)
+                if use_mixed_precision:
+                    with autocast():
+                        outputs = self.model(input_ids=input_ids, attention_mask=attention_mask)
+                        logits = outputs.logits
+                        loss = criterion(logits, labels)
+                else:
+                    outputs = self.model(input_ids=input_ids, attention_mask=attention_mask)
+                    logits = outputs.logits
+                    loss = criterion(logits, labels)
+
+                # 反向传播
+                if use_mixed_precision:
+                    scaler.scale(loss).backward()
+                else:
+                    loss.backward()
+
+                # 对抗训练
+                if use_adversarial and fgm:
+                    fgm.attack()
+                    if use_mixed_precision:
+                        with autocast():
+                            outputs_adv = self.model(input_ids=input_ids, attention_mask=attention_mask)
+                            loss_adv = criterion(outputs_adv.logits, labels)
+                        scaler.scale(loss_adv).backward()
+                    else:
+                        outputs_adv = self.model(input_ids=input_ids, attention_mask=attention_mask)
+                        loss_adv = criterion(outputs_adv.logits, labels)
+                        loss_adv.backward()
+                    fgm.restore()
+
+                # 梯度裁剪和优化
+                if use_mixed_precision:
+                    scaler.unscale_(optimizer)
+                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_grad_norm)
+                    scaler.step(optimizer)
+                    scaler.update()
+                else:
+                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_grad_norm)
+                    optimizer.step()
+
+                scheduler.step()
+
+                # 统计
+                total_loss += loss.item()
+                predictions = torch.argmax(logits, dim=1).cpu().numpy()
+                all_predictions.extend(predictions)
+                all_labels.extend(labels.cpu().numpy())
+
+                # 更新进度条
+                current_acc = sum(np.array(all_predictions) == np.array(all_labels)) / len(all_labels)
+                progress_bar.set_postfix({
+                    'loss': f'{loss.item():.4f}',
+                    'acc': f'{current_acc:.4f}',
+                    'lr': f'{scheduler.get_last_lr()[0]:.2e}'
+                })
+
+            # 计算训练指标
+            avg_train_loss = total_loss / len(train_dataloader)
+            train_metrics = calculate_metrics(all_labels, all_predictions)
+            train_acc = train_metrics['accuracy']
+            train_f1 = train_metrics['f1']
+
+            self.training_history['train_loss'].append(avg_train_loss)
+            self.training_history['train_acc'].append(train_acc)
+            self.training_history['train_f1'].append(train_f1)
+
+            print(f"\n训练结果:")
+            print(f"  Loss: {avg_train_loss:.4f}")
+            print(f"  Accuracy: {train_acc:.4f} ({train_acc*100:.2f}%)")
+            print(f"  F1 Score: {train_f1:.4f}")
+
+            # 验证阶段
+            val_loss, val_acc, val_f1, val_recall, val_precision = self._validate(
+                val_dataloader, criterion
+            )
+
+            self.training_history['val_loss'].append(val_loss)
+            self.training_history['val_acc'].append(val_acc)
+            self.training_history['val_f1'].append(val_f1)
+            self.training_history['val_recall'].append(val_recall)
+            self.training_history['val_precision'].append(val_precision)
+
+            print(f"\n验证结果:")
+            print(f"  Loss: {val_loss:.4f}")
+            print(f"  Accuracy: {val_acc:.4f} ({val_acc*100:.2f}%)")
+            print(f"  Precision: {val_precision:.4f} ({val_precision*100:.2f}%)")
+            print(f"  Recall: {val_recall:.4f} ({val_recall*100:.2f}%) ⭐")
+            print(f"  F1 Score: {val_f1:.4f}")
+
+            # Early stopping检查
+            if val_f1 > best_val_f1:
+                best_val_f1 = val_f1
+                best_val_recall = val_recall
+                patience_counter = 0
+                print(f"  ✓ 验证F1提升! (best: {best_val_f1:.4f}, recall: {best_val_recall:.4f})")
+
+                if save_model:
+                    self.save_model(suffix='_best')
+            else:
+                patience_counter += 1
+                print(f"  - 未提升 (patience: {patience_counter}/{early_stopping_patience})")
+
+                if patience_counter >= early_stopping_patience:
+                    print(f"\n⚠️  触发Early Stopping!")
+                    print(f"最佳验证F1: {best_val_f1:.4f}")
+                    print(f"最佳验证Recall: {best_val_recall:.4f}")
+                    break
+
+        self.is_trained = True
+        print("\n" + "="*80)
+        print(" ✓ 训练完成!")
+        print("="*80)
+        print(f"最佳验证F1: {best_val_f1:.4f} ({best_val_f1*100:.2f}%)")
+        print(f"最佳验证Recall: {best_val_recall:.4f} ({best_val_recall*100:.2f}%)")
+
+        if save_model:
+            self.save_model()
+
+        return self.training_history
+
+    def _validate(self, val_dataloader, criterion):
+        """验证"""
+        self.model.eval()
+
+        total_loss = 0
+        all_predictions = []
+        all_labels = []
+
+        with torch.no_grad():
+            for batch in tqdm(val_dataloader, desc="Validating"):
+                input_ids = batch['input_ids'].to(self.device)
+                attention_mask = batch['attention_mask'].to(self.device)
+                labels = batch['label'].to(self.device)
+
+                outputs = self.model(input_ids=input_ids, attention_mask=attention_mask)
+                logits = outputs.logits
+                loss = criterion(logits, labels)
+
+                total_loss += loss.item()
+                predictions = torch.argmax(logits, dim=1).cpu().numpy()
+                all_predictions.extend(predictions)
+                all_labels.extend(labels.cpu().numpy())
+
+        self.model.train()
+
+        avg_loss = total_loss / len(val_dataloader)
+
+        # Use manual metrics calculation
+        metrics = calculate_metrics(all_labels, all_predictions)
+        accuracy = metrics['accuracy']
+        f1 = metrics['f1']
+        recall = metrics['recall']
+        precision = metrics['precision']
+
+        return avg_loss, accuracy, f1, recall, precision
+
+    def save_model(self, suffix=''):
+        """保存模型"""
+        save_path = self.model_path.replace('.pt', f'{suffix}.pt') if suffix else self.model_path
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+
+        checkpoint = {
+            'model_state_dict': self.model.state_dict(),
+            'model_name': self.model_name,
+            'max_length': self.max_length,
+            'is_trained': True,  # 保存的模型都认为已训练
+            'training_history': self.training_history
+        }
+
+        torch.save(checkpoint, save_path)
+        print(f"\n✓ 模型已保存: {save_path}")
+
+    def load_model(self):
+        """加载模型"""
+        if not os.path.exists(self.model_path):
+            print(f"⚠️  模型文件不存在: {self.model_path}")
+            return False
+
+        print(f"加载模型: {self.model_path}")
+
+        try:
+            checkpoint = torch.load(self.model_path, map_location=self.device)
+            self.model.load_state_dict(checkpoint['model_state_dict'])
+            self.is_trained = checkpoint.get('is_trained', True)
+            self.training_history = checkpoint.get('training_history', {})
+            print("✓ 模型加载成功!")
+            return True
+        except Exception as e:
+            print(f"⚠️  加载失败: {str(e)}")
+            return False
+
+    def predict(self, titles: List[str], batch_size=32) -> np.ndarray:
+        """预测"""
+        if not self.is_trained:
+            raise ValueError("模型未训练!请先训练或加载模型")
+
+        self.model.eval()
+        predictions = []
+
+        dummy_labels = [0] * len(titles)
+        dataset = TitleDataset(titles, dummy_labels, self.tokenizer, self.max_length)
+        dataloader = TorchDataLoader(dataset, batch_size=batch_size, shuffle=False)
+
+        with torch.no_grad():
+            for batch in tqdm(dataloader, desc="Predicting"):
+                input_ids = batch['input_ids'].to(self.device)
+                attention_mask = batch['attention_mask'].to(self.device)
+
+                outputs = self.model(input_ids=input_ids, attention_mask=attention_mask)
+                logits = outputs.logits
+                batch_preds = torch.argmax(logits, dim=1).cpu().numpy()
+                predictions.extend(batch_preds)
+
+        return np.array(predictions)
+
+    def predict_proba(self, titles: List[str], batch_size=32) -> np.ndarray:
+        """预测概率"""
+        if not self.is_trained:
+            raise ValueError("模型未训练!请先训练或加载模型")
+
+        self.model.eval()
+        probabilities = []
+
+        dummy_labels = [0] * len(titles)
+        dataset = TitleDataset(titles, dummy_labels, self.tokenizer, self.max_length)
+        dataloader = TorchDataLoader(dataset, batch_size=batch_size, shuffle=False)
+
+        with torch.no_grad():
+            for batch in tqdm(dataloader, desc="Computing probabilities"):
+                input_ids = batch['input_ids'].to(self.device)
+                attention_mask = batch['attention_mask'].to(self.device)
+
+                outputs = self.model(input_ids=input_ids, attention_mask=attention_mask)
+                logits = outputs.logits
+                probs = torch.softmax(logits, dim=1).cpu().numpy()
+                probabilities.append(probs)
+
+        return np.vstack(probabilities)
+
+    def get_feature_vectors(self, titles: List[str], batch_size=32) -> np.ndarray:
+        """获取特征向量"""
+        if not self.is_trained:
+            raise ValueError("模型未训练!请先训练或加载模型")
+
+        self.feature_model.eval()
+        embeddings = []
+
+        dummy_labels = [0] * len(titles)
+        dataset = TitleDataset(titles, dummy_labels, self.tokenizer, self.max_length)
+        dataloader = TorchDataLoader(dataset, batch_size=batch_size, shuffle=False)
+
+        with torch.no_grad():
+            for batch in tqdm(dataloader, desc="Extracting features"):
+                input_ids = batch['input_ids'].to(self.device)
+                attention_mask = batch['attention_mask'].to(self.device)
+
+                outputs = self.feature_model(input_ids=input_ids, attention_mask=attention_mask)
+                cls_embeddings = outputs.last_hidden_state[:, 0, :].cpu().numpy()
+                embeddings.append(cls_embeddings)
+
+        return np.vstack(embeddings)
+
+
+def main():
+    """主函数: 训练优化的BERT模型"""
+    from data_loader import DataLoader as TitleDataLoader
+
+    print("\n" + "="*80)
+    print(" 🚀 BERT深度优化训练脚本")
+    print("="*80)
+
+    # 获取脚本所在目录
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+
+    # 加载数据
+    print("\n加载数据...")
+    print(f"脚本目录: {script_dir}")
+    train_titles, train_labels, test_titles, test_labels = TitleDataLoader.prepare_dataset(
+        os.path.join(script_dir, 'data/positive.txt'),
+        os.path.join(script_dir, 'data/negative.txt'),
+        os.path.join(script_dir, 'data/testSet-1000.xlsx')
+    )
+
+    if len(train_titles) == 0:
+        print("❌ 未找到数据文件!")
+        return
+
+    print(f"✓ 数据加载完成")
+    print(f"  训练集: {len(train_titles)} 样本")
+    print(f"  测试集: {len(test_titles)} 样本")
+
+    # 创建优化的分类器
+    classifier = OptimizedBERTClassifier(
+        model_name='scibert',  # 使用SciBERT (学术领域专用)
+        max_length=96,  # 增加到96
+        model_path=os.path.join(script_dir, 'models/bert_scibert_optimized.pt'),
+        dropout_rate=0.2
+    )
+
+    # 训练
+    history = classifier.train(
+        train_titles,
+        train_labels,
+        val_ratio=0.1,  # 10%验证集
+        epochs=10,
+        batch_size=32,
+        learning_rate=2e-5,
+        warmup_ratio=0.1,
+        scheduler_type='cosine',  # Cosine调度器
+        loss_type='focal',  # Focal Loss (提升召回率)
+        focal_alpha=0.25,
+        focal_gamma=2.0,
+        early_stopping_patience=3,
+        use_layer_wise_lr=True,  # Layer-wise学习率
+        layer_decay=0.95,
+        use_adversarial=True,  # 对抗训练
+        adv_epsilon=1.0,
+        use_mixed_precision=True,  # 混合精度
+        save_model=True
+    )
+
+    # 在测试集上评估
+    print("\n" + "="*80)
+    print(" 📊 测试集评估")
+    print("="*80)
+
+    predictions = classifier.predict(test_titles)
+
+    print("\n分类报告:")
+    print(classification_report(test_labels, predictions,
+                                target_names=['Incorrect', 'Correct'],
+                                digits=4))
+
+    print("\n混淆矩阵:")
+    cm = confusion_matrix(test_labels, predictions)
+    print(cm)
+    print(f"\nTN={cm[0,0]}, FP={cm[0,1]}, FN={cm[1,0]}, TP={cm[1,1]}")
+
+    # 对比baseline
+    baseline_acc = 0.8525
+    baseline_recall = 0.8116
+    new_acc = sum(predictions == test_labels) / len(test_labels)
+    new_recall = recall_score(test_labels, predictions)
+
+    print("\n" + "="*80)
+    print(" 🎯 对比Baseline")
+    print("="*80)
+    print(f"Baseline Accuracy: {baseline_acc:.4f} ({baseline_acc*100:.2f}%)")
+    print(f"New Accuracy:      {new_acc:.4f} ({new_acc*100:.2f}%) [{'+' if new_acc > baseline_acc else ''}{(new_acc-baseline_acc)*100:.2f}%]")
+    print(f"\nBaseline Recall:   {baseline_recall:.4f} ({baseline_recall*100:.2f}%)")
+    print(f"New Recall:        {new_recall:.4f} ({new_recall*100:.2f}%) [{'+' if new_recall > baseline_recall else ''}{(new_recall-baseline_recall)*100:.2f}%]")
+
+
+if __name__ == "__main__":
+    main()
