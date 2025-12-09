@@ -28,6 +28,13 @@ models/experiments/*.pt
 !models/.gitkeep
 !models/experiments/.gitkeep
 
+# Stages directory models - stages目录下的模型文件也不上传
+stages/*/models/*.pt
+stages/*/models/*.pkl
+stages/*/models/*.model
+stages/*/models/*/*.pt
+stages/*/models/*/*.pkl
+
 # System
 .DS_Store
 
