@@ -1,0 +1,279 @@
+{
+  "comment": "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+  "comment2": "📝 LLM实验配置文件",
+  "comment3": "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+  "comment4": "",
+  "comment5": "🔧 配置步骤：",
+  "comment6": "  1. 复制本文件：cp llm_config_template.json llm_config.json",
+  "comment7": "  2. 找到你想用的模型配置（见下方 llms 部分）",
+  "comment8": "  3. 将 YOUR_API_KEY_HERE 替换为真实的API密钥",
+  "comment9": "  4. 设置 enabled: true 启用该模型",
+  "comment10": "  5. 运行实验：python run_llm_experiment.py --model 模型名",
+  "comment11": "",
+  "comment12": "✨ 添加新模型：",
+  "comment13": "  在 llms 部分添加新的模型配置块，格式参考现有模型",
+  "comment14": "",
+  "comment15": "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+
+  "llms": {
+    "_comment": "━━━━━━━━━━━━━━━━━━━━━━ 模型配置区域 ━━━━━━━━━━━━━━━━━━━━━━",
+    "_comment2": "每个模型配置包含以下字段：",
+    "_comment3": "  - provider: API类型（openai/anthropic）",
+    "_comment4": "  - model: 模型ID（实际调用的模型名称）",
+    "_comment5": "  - api_key: 🔑 你的API密钥（必填）",
+    "_comment6": "  - base_url: API端点（OpenAI兼容模型需要）",
+    "_comment7": "  - temperature: 生成温度（0.0=确定性，1.0=随机性）",
+    "_comment8": "  - max_tokens: 最大输出token数",
+    "_comment9": "  - few_shot_examples: Few-shot示例数量",
+    "_comment10": "  - enabled: 是否启用（true/false）",
+    "_comment11": "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+    "glm-4.6": {
+      "_comment": "━━━━━━━━ 智谱AI GLM-4 Plus（推荐用于高精度） ━━━━━━━━",
+      "provider": "openai",
+      "model": "glm-4-plus",
+      "api_key": "YOUR_API_KEY_HERE",
+      "_key_instruction": "👆 将上面的 YOUR_API_KEY_HERE 替换为你在 https://open.bigmodel.cn 获取的API密钥",
+      "base_url": "https://open.bigmodel.cn/api/paas/v4/",
+      "temperature": 0.0,
+      "max_tokens": 150,
+      "few_shot_examples": 8,
+      "enabled": false,
+      "_enabled_instruction": "👆 设置为 true 启用此模型",
+      "comment": "智谱AI GLM-4.6 - 最新版本，性能优秀但价格较高（50元/M tokens）"
+    },
+
+    "qwen3": {
+      "provider": "openai",
+      "model": "qwen-turbo",
+      "api_key": "YOUR_API_KEY_HERE",
+      "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "temperature": 0.0,
+      "max_tokens": 150,
+      "few_shot_examples": 8,
+      "enabled": true,
+      "comment": "阿里云通义千问Qwen3-Turbo"
+    },
+
+    "qwen-max": {
+      "provider": "openai",
+      "model": "qwen-max",
+      "api_key": "YOUR_API_KEY_HERE",
+      "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "temperature": 0.0,
+      "max_tokens": 150,
+      "few_shot_examples": 8,
+      "enabled": false,
+      "comment": "阿里云通义千问Qwen-Max - 最强版本"
+    },
+
+    "kimi": {
+      "provider": "openai",
+      "model": "kimi-k2-turbo-preview",
+      "api_key": "YOUR_API_KEY_HERE",
+      "base_url": "https://api.moonshot.cn/v1",
+      "temperature": 0.0,
+      "max_tokens": 150,
+      "few_shot_examples": 8,
+      "enabled": true,
+      "comment": "Moonshot AI Kimi-K2-Turbo"
+    },
+
+    "deepseek": {
+      "_comment": "━━━━━━━━ DeepSeek（推荐用于性价比） ━━━━━━━━",
+      "provider": "openai",
+      "model": "deepseek-chat",
+      "api_key": "YOUR_API_KEY_HERE",
+      "_key_instruction": "👆 将上面的 YOUR_API_KEY_HERE 替换为你在 https://platform.deepseek.com 获取的API密钥",
+      "base_url": "https://api.deepseek.com",
+      "temperature": 0.0,
+      "max_tokens": 150,
+      "few_shot_examples": 8,
+      "enabled": true,
+      "_enabled_instruction": "👆 设置为 true 启用此模型，设置为 false 禁用",
+      "comment": "DeepSeek Chat - 性价比之王（1元/M输入，2元/M输出），976样本约0.30元"
+    },
+
+    "gpt-3.5": {
+      "provider": "openai",
+      "model": "gpt-3.5-turbo",
+      "api_key": "YOUR_API_KEY_HERE",
+      "base_url": null,
+      "temperature": 0.0,
+      "max_tokens": 150,
+      "few_shot_examples": 8,
+      "enabled": false,
+      "comment": "OpenAI GPT-3.5 Turbo - 需要国际API密钥"
+    },
+
+    "gpt-4": {
+      "provider": "openai",
+      "model": "gpt-4",
+      "api_key": "YOUR_API_KEY_HERE",
+      "base_url": null,
+      "temperature": 0.0,
+      "max_tokens": 150,
+      "few_shot_examples": 8,
+      "enabled": false,
+      "comment": "OpenAI GPT-4 - 需要国际API密钥"
+    },
+
+    "claude-3": {
+      "provider": "anthropic",
+      "model": "claude-3-opus-20240229",
+      "api_key": "YOUR_API_KEY_HERE",
+      "temperature": 0.0,
+      "max_tokens": 150,
+      "few_shot_examples": 8,
+      "enabled": false,
+      "comment": "Anthropic Claude 3 Opus - 需要Anthropic API密钥"
+    }
+  },
+
+  "experiment": {
+    "_comment": "━━━━━━━━━━━━━━ 实验参数配置 ━━━━━━━━━━━━━━",
+    "few_shot_examples": 8,
+    "_few_shot_comment": "👆 Few-shot示例数量（推荐8个，可选：0/4/8/16）",
+
+    "sample_size": 976,
+    "_sample_size_comment": "👆 测试样本数（976=全部，可以改小用于快速测试，如100）",
+
+    "delay_between_calls": 0.5,
+    "_delay_comment": "👆 API调用间隔（秒）。如果遇到限流错误，改为1.0或更大",
+
+    "output_dir": "output/llm_experiments",
+    "_output_comment": "👆 结果输出目录",
+
+    "comment": "实验参数说明：few_shot_examples=示例数，sample_size=测试样本数，delay_between_calls=API调用间隔（秒）"
+  },
+
+  "cost_estimation": {
+    "glm-4-plus": {
+      "input_price_per_million": 50,
+      "output_price_per_million": 50,
+      "currency": "CNY",
+      "comment": "智谱AI定价：50元/百万tokens（输入+输出同价）"
+    },
+    "qwen-turbo": {
+      "input_price_per_million": 0.3,
+      "output_price_per_million": 0.6,
+      "currency": "CNY",
+      "comment": "通义千问Turbo：0.3元/百万输入tokens，0.6元/百万输出tokens"
+    },
+    "qwen-max": {
+      "input_price_per_million": 20,
+      "output_price_per_million": 60,
+      "currency": "CNY",
+      "comment": "通义千问Max：20元/百万输入tokens，60元/百万输出tokens"
+    },
+    "kimi-k2-turbo-preview": {
+      "input_price_per_million": 0.1,
+      "output_price_per_million": 0.1,
+      "currency": "CNY",
+      "comment": "Kimi K2 Turbo：0.1元/百万tokens"
+    },
+    "deepseek-chat": {
+      "input_price_per_million": 1,
+      "output_price_per_million": 2,
+      "currency": "CNY",
+      "comment": "DeepSeek：1元/百万输入tokens，2元/百万输出tokens"
+    },
+    "gpt-3.5-turbo": {
+      "input_price_per_million": 0.5,
+      "output_price_per_million": 1.5,
+      "currency": "USD",
+      "comment": "GPT-3.5 Turbo：$0.5/M输入tokens，$1.5/M输出tokens"
+    },
+    "gpt-4": {
+      "input_price_per_million": 30,
+      "output_price_per_million": 60,
+      "currency": "USD",
+      "comment": "GPT-4：$30/M输入tokens，$60/M输出tokens"
+    },
+    "claude-3-opus-20240229": {
+      "input_price_per_million": 15,
+      "output_price_per_million": 75,
+      "currency": "USD",
+      "comment": "Claude 3 Opus：$15/M输入tokens，$75/M输出tokens"
+    }
+  },
+
+  "_how_to_add_new_model": "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+  "_how_to_add_new_model2": "✨ 如何添加新模型（配置示例）",
+  "_how_to_add_new_model3": "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+  "_how_to_add_new_model4": "",
+  "_how_to_add_new_model5": "步骤1：在 llms 部分添加新的配置块",
+  "_how_to_add_new_model6": "步骤2：参考下方模板填写参数",
+  "_how_to_add_new_model7": "步骤3：运行测试：python test_llm_config.py --model 你的模型名",
+  "_how_to_add_new_model8": "步骤4：运行实验：python run_llm_experiment.py --model 你的模型名",
+  "_how_to_add_new_model9": "",
+
+  "_new_model_template_comment": "━━━━━━━━━━━━━━ 新模型配置模板 ━━━━━━━━━━━━━━",
+  "_new_model_template": {
+    "your-model-name": {
+      "_说明1": "这是添加新模型的配置模板，复制此块到 llms 部分",
+      "_说明2": "将 your-model-name 改为你的模型显示名称（如 my-gpt）",
+
+      "provider": "openai",
+      "_provider说明": "API类型：openai（OpenAI兼容） 或 anthropic（Claude）",
+
+      "model": "actual-model-id",
+      "_model说明": "实际的模型ID，如：gpt-3.5-turbo, deepseek-chat, glm-4-plus 等",
+
+      "api_key": "YOUR_API_KEY_HERE",
+      "_api_key说明": "🔑 必填！替换为你的真实API密钥",
+
+      "base_url": "https://api.example.com/v1",
+      "_base_url说明": "API端点地址。OpenAI官方模型不需要此项（设为null），国内模型必填",
+
+      "temperature": 0.0,
+      "_temperature说明": "生成温度：0.0=完全确定性（推荐用于分类），1.0=最大随机性",
+
+      "max_tokens": 150,
+      "_max_tokens说明": "最大输出token数，分类任务150足够",
+
+      "few_shot_examples": 8,
+      "_few_shot_examples说明": "Few-shot示例数量，推荐8个",
+
+      "enabled": true,
+      "_enabled说明": "是否启用：true=启用，false=禁用",
+
+      "comment": "你的模型描述"
+    }
+  },
+
+  "_example_for_openai_compatible": "━━━━━━━━━━━━━━ OpenAI兼容模型示例 ━━━━━━━━━━━━━━",
+  "_example1": {
+    "my-custom-model": {
+      "provider": "openai",
+      "model": "your-model-id",
+      "api_key": "sk-xxxxxxxxxxxxxxxx",
+      "base_url": "https://your-api-endpoint.com/v1",
+      "temperature": 0.0,
+      "max_tokens": 150,
+      "few_shot_examples": 8,
+      "enabled": true,
+      "comment": "自定义OpenAI兼容模型"
+    }
+  },
+
+  "_example_for_anthropic": "━━━━━━━━━━━━━━ Anthropic Claude示例 ━━━━━━━━━━━━━━",
+  "_example2": {
+    "my-claude": {
+      "provider": "anthropic",
+      "model": "claude-3-opus-20240229",
+      "api_key": "sk-ant-xxxxxxxxxxxxx",
+      "temperature": 0.0,
+      "max_tokens": 150,
+      "few_shot_examples": 8,
+      "enabled": true,
+      "comment": "Claude 3 Opus - 注意：base_url不需要填写"
+    }
+  },
+
+  "_end_comment": "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+  "_end_comment2": "配置完成后，运行以下命令测试：",
+  "_end_comment3": "  1. 测试配置：python test_llm_config.py",
+  "_end_comment4": "  2. 快速实验：python run_llm_experiment.py --model 模型名 --sample 100",
+  "_end_comment5": "  3. 完整实验：python run_llm_experiment.py --model 模型名",
+  "_end_comment6": "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+}
